@@ -4,7 +4,7 @@
 This project is currently under conceptual development and is **not functional yet**.
 
 ## About
-An experimental port of [Mock-webusb](https://github.com/mock-webusb), aimed at creating a new WebUSB API mock implementation.
+An experimental port of [Mock-webusb](https://github.com/steck0714/mock-webusb), aimed at creating a new WebUSB API mock implementation.
 
 ## Current Status & Roadmap
 - [x] Create repository
