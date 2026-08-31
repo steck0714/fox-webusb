@@ -32,7 +32,7 @@ Once `fox-webusb` polyfill is loaded, it provides the standard `navigator.usb` i
 ```
 
 ## Current Status & Roadmap
-- [x] Create repository ([GitHub Repo](https://github.com/steck0714/mock-webusb))
+- [x] Create repository 
 - [x] Technical research & design
 - [x] Implement initial mock logic
 - [x] Minimal working demo (Complete core pipeline to actual USB)
