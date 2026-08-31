@@ -1,0 +1,59 @@
+{
+  "manifest_version": 2,
+  "name": "fox-webusb",
+  "version": "0.0.0",
+  "description": "Adds a navigator.usb (WebUSB) polyfill to Firefox by bridging to a local native-messaging host. Firefox does not implement WebUSB itself (see the README), so this extension is the only way to get the API in Firefox.",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "fox-webusb@local",
+      "strict_min_version": "102.0"
+    }
+  },
+
+  "permissions": [
+    "nativeMessaging",
+    "http://*/*",
+    "https://*/*",
+    "file:///*"
+  ],
+
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "all_frames": true,
+      "match_about_blank": false,
+      "run_at": "document_start",
+      "js": ["content_script.js"]
+    }
+  ],
+
+  "web_accessible_resources": [
+    "page_polyfill.js"
+  ],
+
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    },
+    "default_title": "fox-webusb"
+  },
+
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  }
+}
