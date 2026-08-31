@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fox-webusb-host"
+version = "0.0.0"
+description = "Firefox native-messaging host for fox-webusb: a WebUSB (navigator.usb) polyfill for Firefox, ported from pyside6-webusb. Talks to real USB hardware via pyusb/libusb on behalf of the fox-webusb WebExtension."
+readme = "../README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "pyusb>=1.2",
+]
+
+# 🦊 移植元 (pyside6-webusb) の pyproject.toml との最大の違いは、
+# PySide6-Essentials への依存が無くなったこと。QtWebEngineへの埋め込みが
+# 前提だった原作と違い、fox-webusbのネイティブホストはFirefox自身から
+# ネイティブメッセージングで起動される独立プロセスであり、GUIツールキットは
+# (チューザーダイアログ用に)標準ライブラリのTkinterだけで足りる。
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+# native/fox_webusb_accel/ (Rustアクセラレーション) は意図的にここに列挙して
+# いない。原作のnative/pyside6_webusb_accel/と同じ位置づけで、完全にオプトイン
+# の別クレートであり、pipの依存関係としてではなく `maturin develop --release`
+# (開発時)または `maturin build --release` → `pip install <wheel>`
+# (配布時)で個別にビルド・インストールするもの。ビルドしなくても
+# fox-webusb-hostは標準ライブラリのbase64へ自動的にフォールバックして
+# 完全に動作する。詳細はnative/fox_webusb_accel/README、および
+# README.md「Rustアクセラレーション(任意)」を参照。
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+fox-webusb-host = "fox_webusb_host.__main__:main"
