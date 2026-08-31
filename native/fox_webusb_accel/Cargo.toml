@@ -1,0 +1,17 @@
+[package]
+name = "fox_webusb_accel"
+version = "0.1.0"
+edition = "2021"
+description = "Optional Rust acceleration for fox-webusb: fast base64 for large WebUSB transfers relayed through the native-messaging host, and ADB (Android Debug Bridge) wire-protocol message framing helpers for building realistic WebADB-style test fixtures. Pure convenience/perf layer -- fox-webusb's native host works fully without this being built; see the package README. Ported unchanged (logic-wise) from pyside6-webusb's native/pyside6_webusb_accel/ v0.0.4b0 -- this crate never depended on Qt/PySide6 in the first place, so the only changes here are the package/module name and doc comments reflecting the new host process."
+license = "MIT"
+
+[lib]
+name = "fox_webusb_accel"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.27.2", features = ["extension-module"] }
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
