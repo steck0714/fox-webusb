@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>fox-webusb の設定</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+    font: 14px/1.6 -apple-system, "Segoe UI", "Hiragino Sans", Meiryo, sans-serif;
+    color: #1c1c1c;
+    background: #fbfaf8;
+  }
+  h1 { display: flex; align-items: center; gap: 10px; font-size: 22px; }
+  h1 img { width: 32px; height: 32px; }
+  h2 { font-size: 16px; margin-top: 40px; border-bottom: 1px solid #e2ddd6; padding-bottom: 8px; }
+  p.lead { color: #555; }
+  .card {
+    background: #fff;
+    border: 1px solid #e5e0d8;
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin: 14px 0;
+  }
+  .status-line { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.ok { background: #2e7d32; }
+  .dot.bad { background: #c62828; }
+  .muted { color: #777; font-size: 13px; }
+  code, pre {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    background: #f1ede6;
+    border-radius: 6px;
+  }
+  code { padding: 1px 6px; }
+  pre { padding: 12px 14px; overflow-x: auto; }
+  ol.steps { padding-left: 20px; }
+  ol.steps li { margin: 10px 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
+  th { color: #777; font-weight: 500; }
+  .origin-block { margin-bottom: 18px; }
+  .origin-title { font-weight: 600; margin-bottom: 4px; word-break: break-all; }
+  button {
+    padding: 5px 10px;
+    font-size: 12.5px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background: #fff;
+    cursor: pointer;
+  }
+  button:hover { background: #f5f2ec; }
+  button.danger { border-color: #d98a86; color: #a12b23; }
+  button.danger:hover { background: #fbeceb; }
+  button.primary { border-color: #d8792d; background: #e07a2a; color: #fff; }
+  button.primary:hover { background: #c9691f; }
+  .empty { color: #999; font-style: italic; padding: 8px 0; }
+  #refreshBar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #17181a; color: #e8e6e2; }
+    .card { background: #1f2023; border-color: #33343a; }
+    h2 { border-bottom-color: #33343a; }
+    code, pre { background: #26272b; }
+    th, td { border-bottom-color: #2c2d31; }
+    button { background: #232427; border-color: #44454a; color: #e8e6e2; }
+    button:hover { background: #2b2c30; }
+  }
+</style>
+</head>
+<body>
+
+<h1><img src="../icons/icon-96.png" alt="">fox-webusb の設定</h1>
+<p class="lead">
+  Firefoxは<code>navigator.usb</code> (WebUSB) を実装していません
+  (<a href="https://github.com/mozilla/standards-positions/issues/100" target="_blank" rel="noreferrer">Mozillaの公式見解</a>は
+  "harmful")。この拡張機能は、ローカルで動くネイティブメッセージングホスト
+  (Pythonプロセス)経由で実USB機器へアクセスすることで、同等のAPIを提供します。
+</p>
+
+<div class="card">
+  <div class="status-line"><span id="statusDot" class="dot"></span><span id="statusText">確認中…</span></div>
+  <p id="statusDetail" class="muted"></p>
+</div>
+
+<h2>セットアップ</h2>
+<ol class="steps">
+  <li>Python 3.9以上がインストールされていることを確認してください。</li>
+  <li>
+    このアドオンに同梱されている <code>native-host/</code> フォルダで、次を実行します:
+    <pre>cd native-host
+pip install -e .   # 仮想環境を使う場合はその中で。使わない場合は末尾に --break-system-packages を追加
+python3 install.py</pre>
+  </li>
+  <li>
+    (任意・推奨) より高速なbase64処理を使いたい場合は、Rustツールチェイン
+    (<code>rustc</code>/<code>cargo</code>、1.74以上)がある環境で:
+    <pre>cd native/fox_webusb_accel
+pip install maturin
+maturin develop --release   # 開発機での利用時。配布時は maturin build --release → pip install</pre>
+    ビルドしなくても標準のPython実装で完全に動作します。
+  </li>
+  <li>この拡張機能を <code>about:debugging#/runtime/this-firefox</code> の「一時的なアドオンを読み込む」から読み込んでください(<code>extension/manifest.json</code> を選択)。</li>
+  <li>上のステータスが緑色になれば準備完了です。</li>
+</ol>
+
+<h2>許可したオリジン</h2>
+<p class="muted">サイトが <code>requestDevice()</code> でユーザーに選ばせ、許可されたUSB機器の一覧です。</p>
+<div id="origins"></div>
+
+<h2>既知のデバイス</h2>
+<p class="muted">これまでに一度でも選択されたことのあるUSB機器の履歴です(デバイス選択ダイアログでの並べ替えに使われます。許可そのものとは別の情報です)。</p>
+<div id="knownDevices"></div>
+<div id="refreshBar">
+  <button id="forgetAllKnown" class="danger">履歴を全て消去</button>
+  <button id="refresh">再読み込み</button>
+</div>
+
+<script src="options.js"></script>
+</body>
+</html>
