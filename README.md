@@ -30,7 +30,7 @@ Once `fox-webusb` polyfill is loaded, it provides the standard `navigator.usb` i
 })();
 </script>
 ```
-
+<img width="1920" height="1138" alt="LibreWolf 2026_09_01 10_59_27" src="https://github.com/user-attachments/assets/dfb0ae44-1539-46e5-85c3-b9b4eaf6d9f1" />
 ## Current Status & Roadmap
 - [x] Create repository 
 - [x] Technical research & design
