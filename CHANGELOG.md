@@ -5,6 +5,209 @@ pyside6-webusb の変更履歴(v0.0.1〜v0.0.4b0)は同プロジェクト自身�
 CHANGELOG.md を参照してください。fox-webusbはアーキテクチャが別物になった
 ため、バージョン番号は移植元の系列を引き継がず 0.0.0 から数え直しています。
 
+## [0.0.0a0] - 実機検証フィードバックに基づく修正リリース
+
+移植元を pyside6-webusb v0.0.4b1 へ追従させつつ、実際にWindows +
+LibreWolf環境で動作検証していただいたレポート(`checklog.md`)、および
+Firefox devtoolsで`navigator.usb`を深く調べた際の見え方についてのフィード
+バックに基づいて修正を行った。
+
+### 修正(実機検証レポート `checklog.md` に基づくもの)
+
+- **Windows上でネイティブホストの標準入出力を明示的にバイナリモード化**
+  (`protocol.ensure_binary_stdio()`を追加、`__main__.py`が起動直後に呼ぶ)。
+  Windows上のPythonは`sys.stdin.buffer`/`sys.stdout.buffer`経由でも、
+  ファイルディスクリプタ自体がWindows Cランタイム(msvcrt)レベルで
+  既定の「テキストモード」のままになっていることがあり、0x0D 0x0A の
+  並びが黙って書き換えられたり0x1Aで早期にEOF扱いされたりする。
+  fox-webusbが使う「4バイト長プレフィックス + 生バイト列」という
+  プロトコルにとってこれは致命的で、`requestDevice()`実行中にネイティブ
+  ホストが切断される(`NetworkError: fox-webusb native host disconnected`)
+  という報告された不具合の原因はこれだと判断した。`msvcrt.setmode(fd,
+  os.O_BINARY)`をWindows上でのみ明示的に適用する、Chromeの公式ネイティブ
+  メッセージングサンプルでも使われている標準的な対処を追加した。
+- **`read_message()`に長さプレフィックスの上限(`MAX_INCOMING_MESSAGE_BYTES`,
+  128MiB)を追加**。上記の根本原因への対処に加え、万一何らかの理由で
+  フレーミングが再びずれた場合に、実際に読もうとする前に分かりやすい
+  `ValueError`として早期に失敗するための安全網。報告された
+  `cannot read more than 33554432 bytes`という症状も、この種のフレーミング
+  破損と整合する。
+- **`manifest.json`の`content_scripts.match_about_blank`を`false`から
+  `true`へ変更**。同一オリジンiframeで`navigator.usb`が見えないという
+  報告に対する前向きな修正(`about:blank`+`document.write()`のような
+  軽量なiframe構築パターンでも注入されるようにする)。ただし報告された
+  症状の根本原因が完全に特定できたわけではない点はREADMEに明記した。
+- **`usb.core.find()`呼び出し全体を`_enumeration_lock`で排他制御**
+  (`bridge.py`)。直接の不具合報告ではないが、上記の原因調査の過程で、
+  ワーカースレッドとチューザーダイアログのライブ更新タイマーが同時に
+  USB列挙を呼びうる設計だったことに気づき、念のため直列化した。
+
+### 移植元 (pyside6-webusb v0.0.4b1) からの追従
+
+- `hardening.py`の`build_configurations_tree`/`_device_interface_class_tuples`
+  内の、記述子の一部が読めなかった際に完全に無言でスキップしていた4箇所へ、
+  診断ログ(`print(f"[fox-webusb-host] ...: 例外を無視: {e}")`)を追加
+  (移植元のruff指摘を踏襲。制御フロー自体は変更なし)。
+- `native/fox_webusb_accel`: `adb_pack_header`のu32キャスト時オーバーフロー
+  バグを`u32::try_from(...).unwrap_or(u32::MAX)`で修正
+  (移植元のclippy::pedantic指摘を踏襲)。`#[must_use]`属性を各関数へ追加。
+  `format_transfer_in_success_json`(移植元が追加したRust側JSON構築の
+  高速パス)をクレート自体には無改造で追加したが、**bridge.py側の実転送
+  経路には組み込んでいない**——fox-webusbのbridge.pyは各メソッドがJSON
+  文字列ではなくdictを返し、シリアライズをprotocol.py側の1箇所に集約する
+  設計を採っているため、この関数が前提とする「メソッドがJSON文字列を
+  直接返す」という形とは構造が異なり、無理に接続すると壊れやすくなると
+  判断した(lib.rs該当箇所のdocコメントに詳細)。
+  自前でclippy(`-W clippy::pedantic`含む)を実行し、指摘された
+  lossy castの1件(`b as u32` → `u32::from(b)`)も追加で修正した。
+  クレートのバージョンを0.2.0へ(新規公開関数の追加のため)。
+
+### 改善: F12 devtoolsでの深い型検証への耐性(コミュニティフィードバックによる)
+
+Firefox devtoolsで`navigator.usb`を深く調べると、`"usb" in navigator`
+のような通常のAPI存在チェックは自然に通る一方、`instanceof EventTarget`・
+`Symbol.toStringTag`・`Object.prototype.toString.call()`・
+`constructor.name`といった深い型検証をすると、Firefox本体が実装している
+`navigator.serial`(Web Serial API)とは異なり、独自実装であることが
+すぐに分かってしまう、というフィードバックをいただいた。具体的には:
+
+| チェック | 修正前のnavigator.usb | Firefox本体のnavigator.serial |
+|---|---|---|
+| `instanceof EventTarget` | `false` | `true` |
+| `Symbol.toStringTag` | `undefined` | `"Serial"` |
+| `Object.prototype.toString.call()` | `[object Object]` | `[object Serial]` |
+| `constructor.name` | `"USBSingleton"` | `"Serial"` |
+
+`page_polyfill.js`を以下のように書き直し、いずれも本物のブラウザ実装と
+同じ見え方になるようにした:
+
+- `navigator.usb`の実体を、`class USB extends EventTarget`という
+  本物のEventTarget継承クラスのインスタンスに変更(旧`USBSingleton`)。
+  `super()`で実際のネイティブ`EventTarget`コンストラクタを呼ぶため、
+  `addEventListener`/`removeEventListener`/`dispatchEvent`は自前実装を
+  やめ、継承した本物のものをそのまま使うようになった(副次的に、
+  `once`/`signal`オプション等、ネイティブEventTargetが元々サポートする
+  機能もすべて無償で使えるようになっている)。
+- connect/disconnectイベントを、プレーンオブジェクトではなく
+  `class USBConnectionEvent extends Event`の実インスタンスとして配送する
+  ように変更。`instanceof Event`が真になり、`Object.prototype.toString
+  .call()`も`"[object USBConnectionEvent]"`になる。
+- `onconnect`/`ondisconnect`を、仕様の「イベントハンドラIDL属性」の
+  挙動(代入は該当イベントへのaddEventListener登録と等価で、再代入は
+  以前のハンドラを自動的に置き換える)に近い形のgetter/setterとして
+  実装し直した。
+- 各クラスへ`Symbol.toStringTag`を明示的に設定
+  (`USB`・`USBDevice`・`USBConfiguration`・`USBInterface`・
+  `USBAlternateInterface`・`USBEndpoint`・`USBConnectionEvent`・
+  `USBInTransferResult`・`USBOutTransferResult`・
+  `USBIsochronousInTransferResult`/`Packet`・
+  `USBIsochronousOutTransferResult`/`Packet`)。
+- 旧`OpenWebUSBDevice`を仕様どおり`USBDevice`へ、旧
+  `USBConfigurationView`/`USBInterfaceView`を`USBConfiguration`/
+  `USBInterface`へ改名(実データ構造の変更ではなく、
+  `constructor.name`が仕様どおりに見えるようにするための改名)。
+  転送結果(`{data, status}`等)もプレーンオブジェクトからそれぞれ専用の
+  クラスへ変更した。
+- **副次的な修正**: 上記のクラス化作業の過程で、
+  `isochronousTransferIn()`が返す各パケットの情報が、実際には
+  `{length, status}`(データそのものを含まない)になっていたことに気づいた。
+  仕様上はパケットごとに`{data, status}`(結合済みバッファの該当区間への
+  DataView)を返すべきで、`types/webusb-polyfill.d.ts`側は既に
+  `USBIsochronousInTransferPacket`という`{data, status}`のインター
+  フェースを(未使用のまま)定義していたにもかかわらず、実装側は反映
+  できていなかった、という内部的な不整合だった。今回あわせて修正し、
+  型定義側の未使用インターフェースも正しく使うように直した。
+
+これらの変更は`navigator.usb`が外部から見て「動く」ことには影響しない
+(既存のAPI呼び出し方はすべて同じまま動く)が、F12で深く調べた際の
+自然さが大きく改善されている。
+
+### 改善(続): F12 devtoolsでの深い型検証への耐性、第2弾
+
+上記の対応後、「実装を覗く別の手段」についても考えられる限り塞いでほしい、
+という追加のフィードバックをいただいた。`page_polyfill.js`を全面的に
+ES6 class構文へ書き直し、次を追加で対応した:
+
+- **内部状態を本物のプライベートフィールド(`#field`構文)へ移行**。
+  以前は`this._handle`・`this._opened`・`this._claimedInterfaces`等、
+  アンダースコア接頭辞の「命名規則による自己申告」でしかない疑似
+  プライベートだったため、`Object.keys(device)`や
+  `Object.getOwnPropertyNames(device)`、あるいは`JSON.stringify(device)`
+  で丸見えになっていた。`#`構文の本物のプライベートフィールドは、
+  クラス本体の外からは構文的にアクセスする手段が無く、上記のいずれの
+  方法でも一切見えない。`USBDevice`・`USB`・`USBConnectionEvent`の
+  内部状態すべてに適用した。他クラス(`USBInterface`)から
+  `USBDevice`の claim/alternate 状態を問い合わせる必要がある箇所は、
+  `_isInterfaceClaimed()`/`_activeAlternateFor()`という橋渡し用の
+  メソッド(非enumerable。プライベートフィールドではなくクラス間連携の
+  ための最小限の公開メソッド)経由にした。
+- **公開メソッドから`.prototype`プロパティを排除**。ES6 classの
+  メソッド構文(`class X { foo() {} }`)で定義された関数は仕様上
+  非コンストラクタであり、`.prototype`プロパティを最初から持たない
+  (旧`X.prototype.foo = function(){}`という代入スタイルでは
+  `.prototype`が生えてしまっていた)。`navigator.usb.getDevices.prototype`
+  等が`undefined`になり、ネイティブな操作と見分けがつきにくくなった。
+- **公開メソッドの非コンストラクタ化**。上と同じ理由により、
+  `new navigator.usb.getDevices()`のような呼び出しは
+  `TypeError: ... is not a constructor`を投げるようになった
+  (以前は素の関数だったため、`new`できてしまっていた)。
+- **`Function.prototype.toString()`のネイティブ偽装**。
+  monkey-patch検出でよく使われる「メソッドの`.toString()`でソースを
+  覗く」手法への対策として、公開メソッド(`getDevices`・`requestDevice`・
+  `open`・`claimInterface`・`transferIn`等、`USB`/`USBDevice`双方の
+  操作メソッド全て)を`Proxy`で薄くラップし、`.toString()`プロパティへの
+  アクセスだけをインターセプトして`"function xxx() { [native code] }"`
+  を返すようにした。`get`トラップ以外は一切定義していないため、
+  実際の呼び出し(`apply`)・`this`束縛・引数の受け渡しは完全に透過的
+  (Proxyの既定のフォールスルー動作がそのまま効く)。`addEventListener`/
+  `removeEventListener`は元々ネイティブの`EventTarget`から継承した
+  ものをそのまま使っている(Proxyで包んですらいない)ため、これらは
+  当然ながら最初からネイティブに見える。
+- **メソッドの引数の数(`.length`)を仕様どおりに調整**。例えば
+  `controlTransferOut(setup, data)`の`data`は仕様上省略可能な引数
+  なので、`data = undefined`という既定値を明示することで
+  `.length === 1`になるようにした(既定値を持つ仮引数は`.length`の
+  カウント対象から外れる、というECMAScriptの仕様どおりの挙動を利用)。
+
+これらはいずれも「navigator.usbというオブジェクトの実体を外部から見た
+形」を本物のブラウザ実装にさらに近づけるためのもので、実際のセキュリティ
+モデル(オリジン単位の許可・保護対象インターフェースクラスの拒否等、
+ネイティブホスト側で強制されるもの)には一切影響しない。このファイル
+自体がFirefox拡張機能の一部として動いている、という事実を隠す意図は
+なく、README/CHANGELOGには通常どおり移植の経緯を明記している。
+
+### 改善: 恒久インストールに対応
+
+これまでは`about:debugging`経由の「一時的なアドオン」としてしか読み込む
+手順を案内しておらず、Firefox/LibreWolfを再起動するたびに読み込み直す
+必要があって不便だという指摘をいただいた。`dist/fox-webusb.xpi`
+(`extension/`フォルダをそのままzip化したもの)を同梱し、README
+「インストール」に恒久インストール手順を追加した:
+
+- **LibreWolf**: ビルド時点で拡張機能の署名検証そのものが無効化されて
+  いるため、`about:config`で`xpinstall.signatures.required`を`false`に
+  した上で、`about:addons`から`.xpi`を直接インストールすれば恒久化できる
+  ことを確認した(`checklog.md`の検証環境と同一条件)。
+- **通常のFirefox(Release/Beta)**: 同じ設定変更では恒久インストールが
+  できない仕様になっている(署名チェックがハードコードされているため)ので、
+  Developer Edition/Nightly/ESRの使用、またはMozillaのAdd-on Developer
+  Hubでの自己配布用署名(unlisted signing)の取得、のいずれかが必要な
+  ことをREADMEに明記した。
+- 拡張機能のID(`browser_specific_settings.gecko.id: "fox-webusb@local"`)
+  は元から固定していたため、一時的インストールと恒久インストールを
+  行き来しても、ネイティブメッセージングホスト側の許可設定
+  (`allowed_extensions`)を変更する必要はない。
+
+### テスト
+
+Node側のテストを21件→37件へ拡充(EventTarget継承・Symbol.toStringTag・
+constructor名・onconnect/ondisconnectの単一スロット挙動・
+USBConnectionEventの型・各種toStringTag・プライベートフィールドによる
+内部状態の不可視化・`.prototype`の不在・非コンストラクタ化・
+`Function.prototype.toString()`のネイティブ偽装・メソッド引数数を検証)。
+Python側もWindowsバイナリモード設定・メッセージ長上限まわりの新規
+テストを追加し89件→93件。合計 93 (Python) + 37 (Node) + 13 (Rust) = 143件。
+
 ## [0.0.0] - 初回リリース(pyside6-webusb v0.0.4b0からの移植)
 
 ### 背景

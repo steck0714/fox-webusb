@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 steck0714
+Copyright (c) 2026 fox-webusb contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------
+
+This project is a port of pyside6-webusb (also MIT-licensed; see its own
+LICENSE file for its copyright notice) to a Firefox-extension-based
+architecture. Substantial portions of native-host/src/fox_webusb_host/
+(hardening.py, errors.py) and native/fox_webusb_accel/ are carried over from
+that project with only naming/documentation changes.
+
+This project depends on, but does not redistribute:
+  - pyusb (Apache License 2.0) -- installed separately via pip; see
+    native-host/pyproject.toml.
+  - pyo3 and the base64 crate (dual MIT/Apache-2.0) -- only pulled in if you
+    choose to build the optional native/fox_webusb_accel/ Rust extension;
+    see its Cargo.toml. Not built or bundled by default.
+
+Unlike pyside6-webusb, this project does not bundle or depend on Qt/PySide6
+at all -- there is nothing Qt-licensed in this repository or its runtime
+dependencies.
