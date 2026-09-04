@@ -5,7 +5,7 @@
  * ページ自身のJS実行コンテキスト(MAIN world)に <script src="..."> として
  * 注入される。
  *
- * 移植元: pyside6-webusb (v0.0.4b0) の polyfill.py 内 WEBUSB_POLYFILL_JS。
+ * 移植元: pyside6-webusb (v0.0.4b1) の polyfill.py 内 WEBUSB_POLYFILL_JS。
  * USBDevice相当のオブジェクトモデル・エラー変換・base64変換・フィルタ検証と
  * いった「ブラウザ側の純粋なロジック」は移植元とほぼ同じまま、
  * トランスポート層だけを次のように置き換えている:
@@ -20,12 +20,44 @@
  *           呼び出し元のoriginの特定・改ざん検知はcontent_script.js →
  *           background.js 側(sender.url、ブラウザ自身が検証する値)で
  *           行われるため、フレームトークンという概念そのものが不要になった
- *           (README「オリジンの検証」を参照)。callBridge()の戻り値は
- *           postMessageで渡された時点で既に構造化されたオブジェクトなので、
- *           JSON.parseは不要。
+ *           (README「オリジンの検証」を参照)。
  *
- * このファイル自体はどのフレームでも同じ内容が注入される
- * (content_script.jsがall_frames:trueで動くため)。
+ * ============================================================
+ * v0.0.0a0: devtoolsでの深い型検証への耐性について
+ * ============================================================
+ * 実際にF12でnavigator.usbを調べた方から、「'usb' in navigator のような
+ * 通常の機能検出は自然に通るが、instanceof EventTarget・
+ * Symbol.toStringTag・constructor.name まで掘ると独自実装だと分かる」
+ * というフィードバックをいただいた。以後の見直しで、次の対策を行っている:
+ *
+ *   1. すべてのクラスをES6 class構文で定義する(旧: function+prototype
+ *      代入)。class構文のメソッドは仕様上(a) enumerable:false
+ *      (for...in/Object.keysに出ない)、(b) .prototypeプロパティを
+ *      持たない(=関数だが「クラスとして new できない」形になる。
+ *      ネイティブメソッドと同じ形)、という2点が自動的に満たされる。
+ *   2. 内部状態(claim済みinterface番号の集合、開いているhandle番号等)を
+ *      すべて本物のプライベートフィールド(#field構文)へ移した。
+ *      Object.keys()・for...in・JSON.stringify()は元よりOwn
+ *      PropertyNames()にすら一切出てこない(アンダースコア接頭辞の
+ *      「隠したつもり」の擬似プライベートとは違う、言語レベルの
+ *      アクセス制御)。
+ *   3. ページに公開する操作メソッド(getDevices/requestDevice/open/
+ *      claimInterface/transferIn 等)を _nativeLooking() でProxyに包み、
+ *      .toString() だけをインターセプトして
+ *      "function xxx() { [native code] }" を返すようにしている
+ *      (Function.prototype.toString()で実装を覗く、というのは
+ *      monkey-patch検出でよく使われる手法であり、これも塞いでおく)。
+ *      apply/get以外のトラップは一切定義していないため、呼び出し時の
+ *      thisバインディングや引数の受け渡しは完全に透過的(Proxyの既定動作
+ *      がRefrect.apply相当にフォールバックする)。
+ *
+ * これらはいずれも「navigator.usbの実体を外部から見た形」を本物の
+ * ブラウザ実装に近づけるためのもので、実際のセキュリティモデル
+ * (オリジン単位の許可・保護対象インターフェースクラスの拒否等、
+ * ネイティブホスト側で強制されるもの)には一切影響しない。
+ * このファイル自体がFirefox拡張機能の一部として動いている、という
+ * 事実そのものを隠す意図はなく、README/CHANGELOGには通常どおり
+ * 移植の経緯を明記している。
  */
 (function () {
   'use strict';
@@ -41,7 +73,6 @@
   var CHANNEL = '__foxWebusb__';
   var _pending = Object.create(null);
   var _nextId = 1;
-  var _listeners = { connect: [], disconnect: [] };
 
   function _onWindowMessage(event) {
     if (event.source !== window) return;
@@ -117,21 +148,9 @@
   }
 
   function _dispatchUsbEvent(kind, deviceDescriptor) {
-    var list = _listeners[kind];
-    if (!list || !list.length) return;
-    var device = new OpenWebUSBDevice(deviceDescriptor || {});
-    var evt = { type: kind, device: device };
-    for (var i = 0; i < list.length; i++) {
-      try {
-        list[i].call(navigatorUsbSingleton, evt);
-      } catch (e) {
-        // 1つのリスナーの例外で他のリスナー呼び出しを止めない(通常のDOMイベント配送と同じ振る舞い)
-        setTimeout(function () { throw e; });
-      }
-    }
-    if (typeof navigatorUsbSingleton['on' + kind] === 'function') {
-      try { navigatorUsbSingleton['on' + kind].call(navigatorUsbSingleton, evt); } catch (e) { setTimeout(function () { throw e; }); }
-    }
+    var device = new USBDevice(deviceDescriptor || {});
+    var event = new USBConnectionEvent(kind, { device: device });
+    navigatorUsbSingleton.dispatchEvent(event);
   }
 
   // ============================================================
@@ -147,270 +166,186 @@
     return true;
   }
 
-  // ============================================================
-  // インターフェース/エンドポイントのディスクリプタ木を、
-  // claim状態・alternate選択状態と突き合わせて解釈するヘルパー群
-  // ============================================================
-  function deriveInterfaceState(device, interfaceNumber) {
-    var iface = null;
-    for (var i = 0; i < device.configurations.length; i++) {
-      var cfg = device.configurations[i];
-      if (cfg.configurationValue !== device._activeConfigurationValue) continue;
-      for (var j = 0; j < cfg.interfaces.length; j++) {
-        if (cfg.interfaces[j].interfaceNumber === interfaceNumber) { iface = cfg.interfaces[j]; break; }
-      }
-    }
-    return iface;
-  }
-
-  function _findClaimedEndpoint(device, endpointNumber, direction) {
-    var claimedAlt = device._claimedAlternates[String(endpointNumber) + ':' + direction];
-    for (var i = 0; i < device.configurations.length; i++) {
-      var cfg = device.configurations[i];
-      if (cfg.configurationValue !== device._activeConfigurationValue) continue;
-      for (var j = 0; j < cfg.interfaces.length; j++) {
-        var interfaceNumber = cfg.interfaces[j].interfaceNumber;
-        if (device._claimedInterfaces.indexOf(interfaceNumber) === -1) continue;
-        var altSetting = device._activeAlternates[interfaceNumber] || 0;
-        var alternates = cfg.interfaces[j].alternates;
-        for (var k = 0; k < alternates.length; k++) {
-          if (alternates[k].alternateSetting !== altSetting) continue;
-          var endpoints = alternates[k].endpoints;
-          for (var m = 0; m < endpoints.length; m++) {
-            if (endpoints[m].endpointNumber === endpointNumber && endpoints[m].direction === direction) {
-              return endpoints[m];
-            }
-          }
-        }
-      }
-    }
-    void claimedAlt;
-    return null;
-  }
-
-  // ============================================================
-  // USBConfiguration / USBInterface / USBAlternateInterface / USBEndpoint
-  // (仕様どおりの読み取り専用ビュー。実データはbridgeから来たプレーン
-  // オブジェクトをラップしているだけ)
-  // ============================================================
-  function USBEndpoint(raw) {
-    this.endpointNumber = raw.endpointNumber;
-    this.direction = raw.direction;
-    this.type = raw.type;
-    this.packetSize = raw.packetSize;
-  }
-
-  function USBAlternateInterface(raw) {
-    this.alternateSetting = raw.alternateSetting;
-    this.interfaceClass = raw.interfaceClass;
-    this.interfaceSubclass = raw.interfaceSubclass;
-    this.interfaceProtocol = raw.interfaceProtocol;
-    this.interfaceName = raw.interfaceName || null;
-    this.endpoints = (raw.endpoints || []).map(function (e) { return new USBEndpoint(e); });
-  }
-
-  function USBInterfaceView(raw, device) {
-    var self = this;
-    this.interfaceNumber = raw.interfaceNumber;
-    this.alternates = (raw.alternates || []).map(function (a) { return new USBAlternateInterface(a); });
-    Object.defineProperty(this, 'claimed', {
-      get: function () { return device._claimedInterfaces.indexOf(self.interfaceNumber) !== -1; },
+  function validateFilters(filters) {
+    if (filters === undefined) return;
+    if (!Array.isArray(filters)) throw new TypeError('filters must be an array');
+    filters.forEach(function (f) {
+      if (!isValidFilterShape(f)) throw new TypeError('invalid device filter: ' + JSON.stringify(f));
     });
-    Object.defineProperty(this, 'alternate', {
-      get: function () {
-        var wantAlt = device._activeAlternates[self.interfaceNumber] || 0;
-        for (var i = 0; i < self.alternates.length; i++) {
-          if (self.alternates[i].alternateSetting === wantAlt) return self.alternates[i];
+  }
+
+  // ============================================================
+  // devtoolsでの深い型検証への耐性を作るための小さなヘルパー2つ
+  // (ファイル冒頭のコメント参照)
+  // ============================================================
+
+  // クラスにSymbol.toStringTagを与える。class本体の中で
+  // `get [Symbol.toStringTag]() { return 'X'; }` と書くのと等価だが、
+  // 全クラスへ機械的に適用したいのでヘルパーにしている。
+  function _setToStringTag(ctor, tag) {
+    Object.defineProperty(ctor.prototype, Symbol.toStringTag, {
+      value: tag, writable: false, enumerable: false, configurable: true,
+    });
+  }
+
+  // implをProxyで包み、.toString()だけをインターセプトして
+  // ネイティブコードっぽい文字列を返すようにする。get以外のトラップは
+  // 一切定義しないため、呼び出し(apply)・存在チェック(has)・
+  // プロパティ列挙(ownKeys)等はすべて既定動作(=target への完全な
+  // 委譲)のまま。class構文で定義されたメソッド(=class methodは元々
+  // 非coctructor・.prototype無し)をラップしても、その性質はそのまま
+  // 保たれる(Proxyは「targetが持つ[[Construct]]がある場合に限り
+  // 自分も[[Construct]]を持つ」という仕様のため)。
+  function _nativeLooking(impl) {
+    return new Proxy(impl, {
+      get: function (target, prop, receiver) {
+        if (prop === 'toString') {
+          return function toString() { return 'function ' + target.name + '() { [native code] }'; };
         }
-        return self.alternates[0] || null;
+        return Reflect.get(target, prop, receiver);
       },
     });
   }
 
-  function USBConfigurationView(raw, device) {
-    this.configurationValue = raw.configurationValue;
-    this.configurationName = raw.configurationName || null;
-    this.interfaces = (raw.interfaces || []).map(function (i) { return new USBInterfaceView(i, device); });
+  function _makeMethodsNativeLooking(ctor, methodNames) {
+    methodNames.forEach(function (name) {
+      var original = ctor.prototype[name];
+      if (typeof original !== 'function') return;
+      Object.defineProperty(ctor.prototype, name, {
+        value: _nativeLooking(original), writable: true, enumerable: false, configurable: true,
+      });
+    });
+  }
+
+  // ============================================================
+  // USBEndpoint / USBAlternateInterface / USBInterface / USBConfiguration
+  // (仕様どおりの読み取り専用ビュー。実データはbridgeから来たプレーン
+  // オブジェクトをラップしているだけ)
+  // ============================================================
+  class USBEndpoint {
+    constructor(raw) {
+      this.endpointNumber = raw.endpointNumber;
+      this.direction = raw.direction;
+      this.type = raw.type;
+      this.packetSize = raw.packetSize;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBEndpoint'; }
+  }
+
+  class USBAlternateInterface {
+    constructor(raw) {
+      this.alternateSetting = raw.alternateSetting;
+      this.interfaceClass = raw.interfaceClass;
+      this.interfaceSubclass = raw.interfaceSubclass;
+      this.interfaceProtocol = raw.interfaceProtocol;
+      this.interfaceName = raw.interfaceName || null;
+      this.endpoints = (raw.endpoints || []).map(function (e) { return new USBEndpoint(e); });
+    }
+
+    get [Symbol.toStringTag]() { return 'USBAlternateInterface'; }
+  }
+
+  class USBInterface {
+    #interfaceNumber;
+    #device;
+
+    constructor(raw, device) {
+      this.interfaceNumber = raw.interfaceNumber;
+      this.alternates = (raw.alternates || []).map(function (a) { return new USBAlternateInterface(a); });
+      this.#interfaceNumber = raw.interfaceNumber;
+      this.#device = device;
+    }
+
+    get claimed() {
+      return this.#device._isInterfaceClaimed(this.#interfaceNumber);
+    }
+
+    get alternate() {
+      var wantAlt = this.#device._activeAlternateFor(this.#interfaceNumber);
+      for (var i = 0; i < this.alternates.length; i++) {
+        if (this.alternates[i].alternateSetting === wantAlt) return this.alternates[i];
+      }
+      return this.alternates[0] || null;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBInterface'; }
+  }
+
+  class USBConfiguration {
+    constructor(raw, device) {
+      this.configurationValue = raw.configurationValue;
+      this.configurationName = raw.configurationName || null;
+      this.interfaces = (raw.interfaces || []).map(function (i) { return new USBInterface(i, device); });
+    }
+
+    get [Symbol.toStringTag]() { return 'USBConfiguration'; }
+  }
+
+  // ============================================================
+  // 転送結果オブジェクト群。仕様上はこれらも名前を持つインターフェースであり
+  // (USBInTransferResult等)、単なる{data, status}のプレーンオブジェクトでは
+  // ない。
+  // ============================================================
+  class USBInTransferResult {
+    constructor(status, data) {
+      this.status = status;
+      this.data = data;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBInTransferResult'; }
+  }
+
+  class USBOutTransferResult {
+    constructor(status, bytesWritten) {
+      this.status = status;
+      this.bytesWritten = bytesWritten;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBOutTransferResult'; }
+  }
+
+  class USBIsochronousInTransferPacket {
+    constructor(status, data) {
+      this.status = status;
+      this.data = data;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBIsochronousInTransferPacket'; }
+  }
+
+  class USBIsochronousInTransferResult {
+    constructor(data, packets) {
+      this.data = data;
+      this.packets = packets;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBIsochronousInTransferResult'; }
+  }
+
+  class USBIsochronousOutTransferPacket {
+    constructor(status, bytesWritten) {
+      this.status = status;
+      this.bytesWritten = bytesWritten;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBIsochronousOutTransferPacket'; }
+  }
+
+  class USBIsochronousOutTransferResult {
+    constructor(packets) {
+      this.packets = packets;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBIsochronousOutTransferResult'; }
   }
 
   // ============================================================
   // USBDevice
   // ============================================================
-  function OpenWebUSBDevice(desc) {
-    desc = desc || {};
-    this.vendorId = desc.vendorId;
-    this.productId = desc.productId;
-    this.manufacturerName = desc.manufacturerName || null;
-    this.productName = desc.productName || null;
-    this.serialNumber = desc.serialNumber || null;
-    this.deviceClass = desc.deviceClass || 0;
-    this.deviceSubclass = desc.deviceSubclass || 0;
-    this.deviceProtocol = desc.deviceProtocol || 0;
-    this.usbVersionMajor = desc.usbVersionMajor || 0;
-    this.usbVersionMinor = desc.usbVersionMinor || 0;
-    this.usbVersionSubminor = desc.usbVersionSubminor || 0;
-    this.deviceVersionMajor = desc.deviceVersionMajor || 0;
-    this.deviceVersionMinor = desc.deviceVersionMinor || 0;
-    this.deviceVersionSubminor = desc.deviceVersionSubminor || 0;
-
-    this._activeConfigurationValue = desc.activeConfigurationValue || (desc.configurations && desc.configurations[0] && desc.configurations[0].configurationValue) || null;
-    this._claimedInterfaces = [];
-    this._activeAlternates = {};
-    this._claimedAlternates = {};
-    this._handle = null;
-    this._opened = false;
-
-    var self = this;
-    this.configurations = (desc.configurations || []).map(function (c) { return new USBConfigurationView(c, self); });
-    Object.defineProperty(this, 'configuration', {
-      get: function () {
-        for (var i = 0; i < self.configurations.length; i++) {
-          if (self.configurations[i].configurationValue === self._activeConfigurationValue) return self.configurations[i];
-        }
-        return null;
-      },
-    });
-    Object.defineProperty(this, 'opened', { get: function () { return self._opened; } });
-  }
-
-  OpenWebUSBDevice.prototype.open = function () {
-    var self = this;
-    if (this._opened) return Promise.resolve();
-    return callBridge('openDevice', { vendorId: this.vendorId, productId: this.productId }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      self._handle = res.handle;
-      self._opened = true;
-    });
-  };
-
-  OpenWebUSBDevice.prototype.close = function () {
-    var self = this;
-    if (!this._opened) return Promise.resolve();
-    return callBridge('closeDevice', { handle: this._handle }).then(function () {
-      self._opened = false;
-      self._handle = null;
-      self._claimedInterfaces = [];
-      self._activeAlternates = {};
-    });
-  };
-
   function requireOpen(device) {
-    if (!device._opened) throw new DOMException('the device must be open() before this call', 'InvalidStateError');
+    if (!device.opened) throw new DOMException('the device must be open() before this call', 'InvalidStateError');
   }
-
-  // 🛡️ 重要: WebUSB(に限らずPromiseを返すWeb API全般)の規約では、引数検証や
-  // 前提状態チェックの失敗も含めて「常にPromiseのrejectとして」報告する
-  // ——同期的にthrowしてはいけない。呼び出し側が
-  // `promise.catch(...)` や `await` の中の `try/catch` だけを書けば、
-  // エラーの原因(引数不正か、状態不正か、実際の転送失敗か)によらず
-  // 一様に処理できることを保証するため。以下の各メソッドが
-  // `Promise.resolve().then(function () { ...検証... })` から書き始めて
-  // いるのはこのためで、`.then()`コールバック内で投げた例外は自動的に
-  // その戻り値Promiseのrejectionに変換される(Promise仕様どおりの挙動)。
-
-  OpenWebUSBDevice.prototype.selectConfiguration = function (configurationValue) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('selectConfiguration', { handle: self._handle, configurationValue: configurationValue });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      self._activeConfigurationValue = configurationValue;
-      self._claimedInterfaces = [];
-      self._activeAlternates = {};
-    });
-  };
-
-  OpenWebUSBDevice.prototype.claimInterface = function (interfaceNumber) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('claimInterface', { handle: self._handle, interfaceNumber: interfaceNumber });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      if (self._claimedInterfaces.indexOf(interfaceNumber) === -1) self._claimedInterfaces.push(interfaceNumber);
-      if (!(interfaceNumber in self._activeAlternates)) self._activeAlternates[interfaceNumber] = 0;
-    });
-  };
-
-  OpenWebUSBDevice.prototype.releaseInterface = function (interfaceNumber) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('releaseInterface', { handle: self._handle, interfaceNumber: interfaceNumber });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      var idx = self._claimedInterfaces.indexOf(interfaceNumber);
-      if (idx !== -1) self._claimedInterfaces.splice(idx, 1);
-      delete self._activeAlternates[interfaceNumber];
-    });
-  };
-
-  OpenWebUSBDevice.prototype.selectAlternateInterface = function (interfaceNumber, alternateSetting) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('selectAlternateInterface', {
-        handle: self._handle, interfaceNumber: interfaceNumber, alternateSetting: alternateSetting,
-      });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      self._activeAlternates[interfaceNumber] = alternateSetting;
-    });
-  };
-
-  OpenWebUSBDevice.prototype.reset = function () {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('resetDevice', { handle: self._handle });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      self._claimedInterfaces = [];
-      self._activeAlternates = {};
-    });
-  };
-
-  OpenWebUSBDevice.prototype.clearHalt = function (direction, endpointNumber) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('clearHalt', { handle: self._handle, direction: direction, endpointNumber: endpointNumber });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-    });
-  };
-
-  OpenWebUSBDevice.prototype.forget = function () {
-    var self = this;
-    return callBridge('forgetGrantedDevice', { vendorId: this.vendorId, productId: this.productId }).then(function () {
-      return self.close();
-    });
-  };
-
-  OpenWebUSBDevice.prototype.transferIn = function (endpointNumber, length) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('bulkTransferIn', { handle: self._handle, endpoint: endpointNumber, length: length });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      var bytes = base64ToUint8(res.data);
-      return { data: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), status: res.status };
-    });
-  };
-
-  OpenWebUSBDevice.prototype.transferOut = function (endpointNumber, data) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      var bytes = bufferSourceToUint8(data);
-      requireOpen(self);
-      return callBridge('bulkTransferOut', { handle: self._handle, endpoint: endpointNumber, data: bytesToBase64(bytes) });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      return { bytesWritten: res.bytesWritten, status: res.status };
-    });
-  };
 
   var USB_REQUEST_TYPE_BITS = { standard: 0x00, class: 0x20, vendor: 0x40 };
   var USB_RECIPIENT_BITS = { device: 0x00, interface: 0x01, endpoint: 0x02, other: 0x03 };
@@ -427,134 +362,345 @@
     // 実際の転送方向には影響しない(bridge.py冒頭のコメント参照)。
   }
 
-  OpenWebUSBDevice.prototype.controlTransferIn = function (setup, length) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('controlTransferIn', {
-        handle: self._handle, requestType: combineRequestType(setup),
-        request: setup.request, value: setup.value, index: setup.index, length: length,
-      });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      var bytes = base64ToUint8(res.data);
-      return { data: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), status: res.status };
-    });
-  };
+  class USBDevice {
+    // 🛡️ v0.0.0a0: 本物のプライベートフィールド(#構文)。Object.keys()・
+    // for...in・JSON.stringify()は元より、Object.getOwnPropertyNames()にも
+    // 一切出てこない——アンダースコア接頭辞ではただの「命名規則による自己
+    // 申告」に過ぎなかったが、こちらは言語仕様レベルでクラス本体の外から
+    // 触れない(構文的に許されない)。
+    #handle = null;
+    #opened = false;
+    #claimedInterfaces = [];
+    #activeAlternates = Object.create(null);
+    #activeConfigurationValue;
 
-  OpenWebUSBDevice.prototype.controlTransferOut = function (setup, data) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      var bytes = data ? bufferSourceToUint8(data) : new Uint8Array(0);
-      requireOpen(self);
-      return callBridge('controlTransferOut', {
-        handle: self._handle, requestType: combineRequestType(setup),
-        request: setup.request, value: setup.value, index: setup.index, data: bytesToBase64(bytes),
-      });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      return { bytesWritten: res.bytesWritten, status: res.status };
-    });
-  };
+    constructor(desc) {
+      desc = desc || {};
+      this.vendorId = desc.vendorId;
+      this.productId = desc.productId;
+      this.manufacturerName = desc.manufacturerName || null;
+      this.productName = desc.productName || null;
+      this.serialNumber = desc.serialNumber || null;
+      this.deviceClass = desc.deviceClass || 0;
+      this.deviceSubclass = desc.deviceSubclass || 0;
+      this.deviceProtocol = desc.deviceProtocol || 0;
+      this.usbVersionMajor = desc.usbVersionMajor || 0;
+      this.usbVersionMinor = desc.usbVersionMinor || 0;
+      this.usbVersionSubminor = desc.usbVersionSubminor || 0;
+      this.deviceVersionMajor = desc.deviceVersionMajor || 0;
+      this.deviceVersionMinor = desc.deviceVersionMinor || 0;
+      this.deviceVersionSubminor = desc.deviceVersionSubminor || 0;
 
-  OpenWebUSBDevice.prototype.isochronousTransferIn = function (endpointNumber, packetLengths) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      requireOpen(self);
-      return callBridge('isochronousTransferIn', {
-        handle: self._handle, endpoint: endpointNumber, packetLengths: packetLengths,
-      });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      var packets = res.packets.map(function (p) {
-        var bytes = base64ToUint8(p.data);
-        return { data: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), status: p.status };
-      });
-      // 仕様: isochronousTransferInは全パケットを1本のバッファへ結合したdataと、
-      // 各パケットの{length, status}を持つpackets配列の両方を返す。
-      var totalLength = packets.reduce(function (sum, p) { return sum + p.data.byteLength; }, 0);
-      var combined = new Uint8Array(totalLength);
-      var offset = 0;
-      var packetRecords = [];
-      packets.forEach(function (p) {
-        combined.set(new Uint8Array(p.data.buffer, p.data.byteOffset, p.data.byteLength), offset);
-        packetRecords.push({ length: p.data.byteLength, status: p.status });
-        offset += p.data.byteLength;
-      });
-      return { data: new DataView(combined.buffer), packets: packetRecords };
-    });
-  };
+      this.#activeConfigurationValue = desc.activeConfigurationValue ||
+        (desc.configurations && desc.configurations[0] && desc.configurations[0].configurationValue) || null;
 
-  OpenWebUSBDevice.prototype.isochronousTransferOut = function (endpointNumber, data, packetLengths) {
-    var self = this;
-    return Promise.resolve().then(function () {
-      var bytes = bufferSourceToUint8(data);
-      requireOpen(self);
-      return callBridge('isochronousTransferOut', {
-        handle: self._handle, endpoint: endpointNumber, data: bytesToBase64(bytes), packetLengths: packetLengths,
-      });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      var packetRecords = res.packets.map(function (p) { return { bytesWritten: p.bytesWritten, status: p.status }; });
-      return { packets: packetRecords };
-    });
-  };
+      this.configurations = (desc.configurations || []).map(function (c) { return new USBConfiguration(c, this); }, this);
+    }
 
-  void deriveInterfaceState;
-  void _findClaimedEndpoint;
+    get configuration() {
+      for (var i = 0; i < this.configurations.length; i++) {
+        if (this.configurations[i].configurationValue === this.#activeConfigurationValue) return this.configurations[i];
+      }
+      return null;
+    }
+
+    get opened() { return this.#opened; }
+
+    get [Symbol.toStringTag]() { return 'USBDevice'; }
+
+    // 🔗 USBInterface(別クラス)がclaimed/alternateを問い合わせるための、
+    // クラスをまたいだアクセス用の窓口。プライベートフィールドはクラス外から
+    // 一切参照できないため、こういう小さな橋渡しメソッドが要る
+    // (「アンダースコア接頭辞＋非enumerable」という、privateとpublicの
+    // 中間くらいの意味づけ——他クラスからの利用は前提だが、仕様が定義する
+    // navigator.usb / USBDeviceの公開APIの一部ではない)。
+    _isInterfaceClaimed(interfaceNumber) {
+      return this.#claimedInterfaces.indexOf(interfaceNumber) !== -1;
+    }
+
+    _activeAlternateFor(interfaceNumber) {
+      return this.#activeAlternates[interfaceNumber] || 0;
+    }
+
+    open() {
+      if (this.#opened) return Promise.resolve();
+      return callBridge('openDevice', { vendorId: this.vendorId, productId: this.productId }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        this.#handle = res.handle;
+        this.#opened = true;
+      });
+    }
+
+    close() {
+      if (!this.#opened) return Promise.resolve();
+      return callBridge('closeDevice', { handle: this.#handle }).then(() => {
+        this.#opened = false;
+        this.#handle = null;
+        this.#claimedInterfaces = [];
+        this.#activeAlternates = Object.create(null);
+      });
+    }
+
+    selectConfiguration(configurationValue) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('selectConfiguration', { handle: this.#handle, configurationValue: configurationValue });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        this.#activeConfigurationValue = configurationValue;
+        this.#claimedInterfaces = [];
+        this.#activeAlternates = Object.create(null);
+      });
+    }
+
+    claimInterface(interfaceNumber) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('claimInterface', { handle: this.#handle, interfaceNumber: interfaceNumber });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        if (this.#claimedInterfaces.indexOf(interfaceNumber) === -1) this.#claimedInterfaces.push(interfaceNumber);
+        if (!(interfaceNumber in this.#activeAlternates)) this.#activeAlternates[interfaceNumber] = 0;
+      });
+    }
+
+    releaseInterface(interfaceNumber) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('releaseInterface', { handle: this.#handle, interfaceNumber: interfaceNumber });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        var idx = this.#claimedInterfaces.indexOf(interfaceNumber);
+        if (idx !== -1) this.#claimedInterfaces.splice(idx, 1);
+        delete this.#activeAlternates[interfaceNumber];
+      });
+    }
+
+    selectAlternateInterface(interfaceNumber, alternateSetting) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('selectAlternateInterface', {
+          handle: this.#handle, interfaceNumber: interfaceNumber, alternateSetting: alternateSetting,
+        });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        this.#activeAlternates[interfaceNumber] = alternateSetting;
+      });
+    }
+
+    reset() {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('resetDevice', { handle: this.#handle });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        this.#claimedInterfaces = [];
+        this.#activeAlternates = Object.create(null);
+      });
+    }
+
+    clearHalt(direction, endpointNumber) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('clearHalt', { handle: this.#handle, direction: direction, endpointNumber: endpointNumber });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+      });
+    }
+
+    forget() {
+      return callBridge('forgetGrantedDevice', { vendorId: this.vendorId, productId: this.productId }).then(() => {
+        return this.close();
+      });
+    }
+
+    transferIn(endpointNumber, length) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('bulkTransferIn', { handle: this.#handle, endpoint: endpointNumber, length: length });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        var bytes = base64ToUint8(res.data);
+        return new USBInTransferResult(res.status, new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+      });
+    }
+
+    transferOut(endpointNumber, data) {
+      return Promise.resolve().then(() => {
+        var bytes = bufferSourceToUint8(data);
+        requireOpen(this);
+        return callBridge('bulkTransferOut', { handle: this.#handle, endpoint: endpointNumber, data: bytesToBase64(bytes) });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        return new USBOutTransferResult(res.status, res.bytesWritten);
+      });
+    }
+
+    controlTransferIn(setup, length) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('controlTransferIn', {
+          handle: this.#handle, requestType: combineRequestType(setup),
+          request: setup.request, value: setup.value, index: setup.index, length: length,
+        });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        var bytes = base64ToUint8(res.data);
+        return new USBInTransferResult(res.status, new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+      });
+    }
+
+    controlTransferOut(setup, data = undefined) {
+      return Promise.resolve().then(() => {
+        var bytes = data ? bufferSourceToUint8(data) : new Uint8Array(0);
+        requireOpen(this);
+        return callBridge('controlTransferOut', {
+          handle: this.#handle, requestType: combineRequestType(setup),
+          request: setup.request, value: setup.value, index: setup.index, data: bytesToBase64(bytes),
+        });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        return new USBOutTransferResult(res.status, res.bytesWritten);
+      });
+    }
+
+    isochronousTransferIn(endpointNumber, packetLengths) {
+      return Promise.resolve().then(() => {
+        requireOpen(this);
+        return callBridge('isochronousTransferIn', {
+          handle: this.#handle, endpoint: endpointNumber, packetLengths: packetLengths,
+        });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        // 仕様: isochronousTransferInは全パケットを1本のバッファへ結合した
+        // dataと、各パケット自身のdata(その結合バッファの該当区間への
+        // DataView)・statusを持つpackets配列の両方を返す。パケットごとの
+        // DataViewは新たにコピーせず、結合済みバッファ(combined.buffer)への
+        // 部分ビューとして作る(仕様の意図どおり、メモリ効率も良い)。
+        var decoded = res.packets.map(function (p) { return { status: p.status, bytes: base64ToUint8(p.data) }; });
+        var totalLength = decoded.reduce(function (sum, p) { return sum + p.bytes.length; }, 0);
+        var combined = new Uint8Array(totalLength);
+        var offset = 0;
+        var packetRecords = [];
+        decoded.forEach(function (p) {
+          combined.set(p.bytes, offset);
+          var view = new DataView(combined.buffer, offset, p.bytes.length);
+          packetRecords.push(new USBIsochronousInTransferPacket(p.status, view));
+          offset += p.bytes.length;
+        });
+        return new USBIsochronousInTransferResult(new DataView(combined.buffer), packetRecords);
+      });
+    }
+
+    isochronousTransferOut(endpointNumber, data, packetLengths) {
+      return Promise.resolve().then(() => {
+        var bytes = bufferSourceToUint8(data);
+        requireOpen(this);
+        return callBridge('isochronousTransferOut', {
+          handle: this.#handle, endpoint: endpointNumber, data: bytesToBase64(bytes), packetLengths: packetLengths,
+        });
+      }).then((res) => {
+        if (!res.success) throwFromResult(res);
+        var packetRecords = res.packets.map(function (p) { return new USBIsochronousOutTransferPacket(p.status, p.bytesWritten); });
+        return new USBIsochronousOutTransferResult(packetRecords);
+      });
+    }
+  }
+  _makeMethodsNativeLooking(USBDevice, [
+    'open', 'close', 'selectConfiguration', 'claimInterface', 'releaseInterface',
+    'selectAlternateInterface', 'reset', 'clearHalt', 'forget',
+    'transferIn', 'transferOut', 'controlTransferIn', 'controlTransferOut',
+    'isochronousTransferIn', 'isochronousTransferOut',
+  ]);
 
   // ============================================================
-  // USB (navigator.usb) シングルトン
+  // USBConnectionEvent (connect/disconnectイベント)
   // ============================================================
-  function validateFilters(filters) {
-    if (filters === undefined) return;
-    if (!Array.isArray(filters)) throw new TypeError('filters must be an array');
-    filters.forEach(function (f) {
-      if (!isValidFilterShape(f)) throw new TypeError('invalid device filter: ' + JSON.stringify(f));
-    });
+  //
+  // 🦊 fox-webusb固有の注記(v0.0.0a0で追加): このクラスと直後のUSBは、
+  // どちらもネイティブの Event / EventTarget を実際に継承する必要がある。
+  // super()を呼べば、本物のEventTarget/Eventのコンストラクタが実際に走り、
+  // その後は継承したメソッドをそのまま使える——自前でリスナー配列を管理
+  // する必要が無くなる、というおまけつきで。
+  class USBConnectionEvent extends Event {
+    #device;
+
+    constructor(type, eventInitDict) {
+      super(type, eventInitDict);
+      this.#device = (eventInitDict && eventInitDict.device) || null;
+    }
+
+    get device() {
+      return this.#device;
+    }
+
+    get [Symbol.toStringTag]() { return 'USBConnectionEvent'; }
   }
 
-  function USBSingleton() {}
-  USBSingleton.prototype.getDevices = function () {
-    return callBridge('listDevices', {}).then(function (res) {
-      return (res.devices || []).map(function (d) { return new OpenWebUSBDevice(d); });
-    });
-  };
+  // ============================================================
+  // USB (navigator.usb) 本体
+  // ============================================================
+  class USB extends EventTarget {
+    #onconnectHandler = null;
+    #ondisconnectHandler = null;
 
-  USBSingleton.prototype.requestDevice = function (options) {
-    return Promise.resolve().then(function () {
-      options = options || {};
-      validateFilters(options.filters);
-      validateFilters(options.exclusionFilters);
-      if (navigator.userActivation && navigator.userActivation.isActive === false) {
-        throw new DOMException('requestDevice() must be called from a user gesture (e.g. a click handler)', 'SecurityError');
-      }
-      return callBridge('requestDeviceChooser', {
-        filters: options.filters || [], exclusionFilters: options.exclusionFilters || [],
+    getDevices() {
+      return callBridge('listDevices', {}).then(function (res) {
+        return (res.devices || []).map(function (d) { return new USBDevice(d); });
       });
-    }).then(function (res) {
-      if (!res.success) throwFromResult(res);
-      return new OpenWebUSBDevice(res.device);
-    });
-  };
+    }
 
-  USBSingleton.prototype.addEventListener = function (type, listener) {
-    if (!_listeners[type]) return;
-    if (_listeners[type].indexOf(listener) === -1) _listeners[type].push(listener);
-  };
-  USBSingleton.prototype.removeEventListener = function (type, listener) {
-    if (!_listeners[type]) return;
-    var idx = _listeners[type].indexOf(listener);
-    if (idx !== -1) _listeners[type].splice(idx, 1);
-  };
+    requestDevice(options) {
+      return Promise.resolve().then(function () {
+        options = options || {};
+        validateFilters(options.filters);
+        validateFilters(options.exclusionFilters);
+        if (navigator.userActivation && navigator.userActivation.isActive === false) {
+          throw new DOMException('requestDevice() must be called from a user gesture (e.g. a click handler)', 'SecurityError');
+        }
+        return callBridge('requestDeviceChooser', {
+          filters: options.filters || [], exclusionFilters: options.exclusionFilters || [],
+        });
+      }).then(function (res) {
+        if (!res.success) throwFromResult(res);
+        return new USBDevice(res.device);
+      });
+    }
 
-  var navigatorUsbSingleton = new USBSingleton();
-  navigatorUsbSingleton.onconnect = null;
-  navigatorUsbSingleton.ondisconnect = null;
+    // 🛡️ onconnect/ondisconnectは仕様上「イベントハンドラIDL属性」——
+    // 代入は"connect"/"disconnect"へのaddEventListener()登録と等価であり、
+    // 再代入は以前のハンドラを置き換える(複数回addEventListener()した場合とは
+    // 違って、常に高々1個しか効かない)。addEventListener自体はEventTargetから
+    // 継承したネイティブのものをそのまま使う——自前のリスナー管理は不要。
+    get onconnect() {
+      return this.#onconnectHandler;
+    }
+
+    set onconnect(value) {
+      if (this.#onconnectHandler) this.removeEventListener('connect', this.#onconnectHandler);
+      this.#onconnectHandler = (typeof value === 'function') ? value : null;
+      if (this.#onconnectHandler) this.addEventListener('connect', this.#onconnectHandler);
+    }
+
+    get ondisconnect() {
+      return this.#ondisconnectHandler;
+    }
+
+    set ondisconnect(value) {
+      if (this.#ondisconnectHandler) this.removeEventListener('disconnect', this.#ondisconnectHandler);
+      this.#ondisconnectHandler = (typeof value === 'function') ? value : null;
+      if (this.#ondisconnectHandler) this.addEventListener('disconnect', this.#ondisconnectHandler);
+    }
+
+    get [Symbol.toStringTag]() { return 'USB'; }
+  }
+  _makeMethodsNativeLooking(USB, ['getDevices', 'requestDevice']);
+
+  var navigatorUsbSingleton = new USB();
 
   try {
     Object.defineProperty(navigator, 'usb', {
-      value: navigatorUsbSingleton, writable: false, configurable: false, enumerable: true,
+      value: navigatorUsbSingleton, writable: false, configurable: true, enumerable: true,
     });
   } catch (e) {
     // 🛡️ 別のスクリプトが既にnavigator.usbをdefineしていて再定義できない場合、
