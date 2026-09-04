@@ -2,193 +2,399 @@
 
 🇯🇵 [日本語](README.ja.md) | 🇺🇸 [English](README.en.md) | 🇨🇳 [简体中文](README.zh.md)
 
-⚠️ **Experimental (v0.0.0)**: The core implementation connecting down to actual USB communication is complete. However, this is an initial pre-release and has **not yet been verified with physical USB devices**. Use with caution.
+> ⚠️ **Experimental Alpha — v0.0.0a**
+>
+> `fox-webusb` is an experimental, unofficial WebUSB-compatible implementation for Firefox-oriented environments.
+>
+> The project is capable of connecting the JavaScript API pipeline to a native USB backend. However, it remains an early alpha project and hardware compatibility is still being verified.
 
 ## About
 
-`fox-webusb` is an experimental Firefox-oriented implementation of [Mock-webusb](https://github.com/steck0714/Mock-webusb), created to provide a WebUSB-compatible API in environments where native WebUSB may not be available.
+`fox-webusb` is an experimental Firefox-oriented implementation derived from the ideas and implementation history of [Mock-webusb](https://github.com/steck0714/Mock-webusb).
 
-Unlike purely visual or superficial polyfills, `fox-webusb` is designed to handle the pipeline down to actual underlying USB communication.
+The goal is to provide a WebUSB-compatible API surface in environments where Firefox does not provide a native `navigator.usb` implementation.
 
-The project uses a Firefox WebExtension and Native Messaging to connect the JavaScript API to a native USB backend.
+This project is not intended to reproduce Chromium's internal WebUSB implementation.
+
+Instead, it builds an alternative architecture around Firefox WebExtensions and Native Messaging:
 
 ```text
 Web Page
     │
     │ navigator.usb
     ▼
-Firefox Extension
+Firefox WebExtension
     │
     │ Native Messaging
     ▼
 Native Host
     │
-    │ PyUSB / libusb
+    │ Python USB Backend
+    ▼
+PyUSB / libusb
+    │
     ▼
 USB Device
 ```
 
-## Quick Start (v0.0.0)
+The project is designed to go beyond a purely visual API polyfill and connect WebUSB-style JavaScript operations to an underlying USB communication backend.
 
-Once the `fox-webusb` polyfill is loaded, it provides the standard `navigator.usb` interface:
+## Why fox-webusb?
 
-```html
-<script src="https://jsdelivr.net"></script>
+Firefox does not provide a native `navigator.usb` implementation.
 
-<script>
-(async () => {
-  if (!navigator.usb) {
-    throw new Error("fox-webusb is not initialized");
-  }
+`fox-webusb` explores whether a WebUSB-compatible API can instead be provided through the combination of:
 
-  console.log("fox-webusb:", navigator.usb);
+- Firefox WebExtensions
+- Page-side JavaScript injection
+- Content-script messaging
+- Background-script coordination
+- Firefox Native Messaging
+- A native USB backend
 
-  const devices = await navigator.usb.getDevices();
-  console.log("USB devices:", devices);
-})();
-</script>
+This makes `fox-webusb` an architectural experiment as much as a WebUSB compatibility project.
+
+# Architecture
+
+```text
+┌──────────────────────────────┐
+│          Web Page            │
+│                              │
+│       navigator.usb          │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│      Firefox WebExtension    │
+│                              │
+│  • Page Polyfill             │
+│  • Content Script            │
+│  • Background Script         │
+│  • Extension UI              │
+└──────────────┬───────────────┘
+               │
+               │ Native Messaging
+               ▼
+┌──────────────────────────────┐
+│         Native Host          │
+│                              │
+│  • Protocol                  │
+│  • USB Bridge                │
+│  • Permission Handling       │
+│  • Security Checks           │
+│  • Device Chooser            │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│       PyUSB / libusb         │
+└──────────────┬───────────────┘
+               │
+               ▼
+          USB Device
 ```
 
-> The example above demonstrates the JavaScript API surface. Native host setup and Firefox extension installation are required for actual USB communication.
+Unlike a browser-native implementation, multiple components cooperate to expose the API.
 
-## API
+The page itself does not communicate directly with the USB backend.
 
-`fox-webusb` provides a WebUSB-compatible API surface centered around `navigator.usb`.
+# API
+
+`fox-webusb` exposes a WebUSB-compatible API centered around:
+
+```javascript
+navigator.usb
+```
 
 The implementation includes WebUSB-style objects such as:
 
 ```text
-navigator.usb
 USB
 USBDevice
 USBConfiguration
 USBInterface
 USBAlternateInterface
 USBEndpoint
+
 USBConnectionEvent
+
 USBInTransferResult
 USBOutTransferResult
+
 USBIsochronousInTransferResult
 USBIsochronousOutTransferResult
 USBIsochronousInTransferPacket
 ```
 
-The implementation aims to reproduce the observable behavior and structure of the WebUSB API where practical.
+The project aims to reproduce the observable API shape and behavior of WebUSB where practical.
 
-It is **not** a copy of Chromium's internal WebUSB implementation.
+Example:
 
-## Architecture
+```javascript
+if (!navigator.usb) {
+    throw new Error("fox-webusb is not initialized");
+}
 
-```text
-┌──────────────────────────┐
-│        Web Page          │
-│                          │
-│      navigator.usb       │
-└────────────┬─────────────┘
-             │
-             ▼
-┌──────────────────────────┐
-│   Firefox WebExtension   │
-│                          │
-│  Page Polyfill           │
-│  Content Script          │
-│  Background Script       │
-└────────────┬─────────────┘
-             │
-             │ Native Messaging
-             ▼
-┌──────────────────────────┐
-│      Native Host         │
-│                          │
-│  Python / Protocol       │
-│  USB Bridge              │
-│  Security Checks         │
-└────────────┬─────────────┘
-             │
-             ▼
-┌──────────────────────────┐
-│      PyUSB / libusb      │
-└────────────┬─────────────┘
-             │
-             ▼
-        USB Device
+const devices = await navigator.usb.getDevices();
+
+console.log("Authorized USB devices:", devices);
 ```
 
-## Native Messaging
+For device selection, applications use the familiar WebUSB-style flow:
 
-`fox-webusb` uses Firefox Native Messaging to communicate between the extension and the native USB backend.
+```javascript
+const device = await navigator.usb.requestDevice({
+    filters: [
+        {
+            vendorId: 0x1234
+        }
+    ]
+});
 
-```text
-Firefox Extension
-        │
-        │ Native Messaging
-        ▼
-   Native Host
-        │
-        ▼
-   USB Backend
+console.log(device);
 ```
 
-The native host is responsible for operations that cannot be performed directly from ordinary WebExtension JavaScript.
+Actual device availability depends on the extension, native host, operating system, USB permissions, and backend support.
 
-On Windows, standard input/output streams are explicitly configured for binary mode to avoid problems caused by text-mode stream processing.
+# USB Communication
 
-Incoming native messages are also subject to size limits and protocol validation.
-
-## USB Communication
-
-The project is designed to reach the underlying USB communication layer rather than only returning simulated device objects.
-
-The backend can handle operations including:
+The native backend is designed to support operations including:
 
 - USB device enumeration
-- Device opening and closing
-- Configuration handling
-- Interface handling
+- Device opening
+- Device closing
+- Configuration selection
+- Interface claiming
+- Interface release
+- Alternate interface selection
 - Control transfers
 - Bulk transfers
 - Interrupt transfers
-- Isochronous transfers
+- Isochronous transfer support where available
+- Endpoint halt handling
+- Device reset operations
 
-Some transfer behavior depends on the capabilities and semantics of the underlying PyUSB/libusb backend.
+The exact behavior of some operations depends on the capabilities and semantics of the underlying PyUSB/libusb environment.
 
-In particular, isochronous transfer behavior may not be identical to a native browser WebUSB implementation.
+Therefore, compatibility should not yet be considered identical to a browser-native WebUSB implementation.
 
-## Security
+# Native Messaging
 
-Because `fox-webusb` can reach native USB functionality, security restrictions are part of the implementation.
+Firefox WebExtensions cannot directly perform arbitrary native USB operations.
 
-The project includes checks and restrictions around areas such as:
+`fox-webusb` therefore uses Firefox Native Messaging:
 
-- Secure contexts
-- User activation
+```text
+Web Page
+    │
+    ▼
+Page Polyfill
+    │
+    ▼
+Content Script
+    │
+    ▼
+Background Script
+    │
+    ▼
+Native Messaging
+    │
+    ▼
+fox-webusb Native Host
+    │
+    ▼
+USB Backend
+```
+
+The native host acts as the boundary between the browser environment and the USB backend.
+
+The implementation includes protocol validation and message-size handling for communication between the extension and the native process.
+
+Large payload handling may use encoded and chunked transport formats depending on the operation.
+
+# Security Model
+
+Because `fox-webusb` can reach native USB functionality, unrestricted device access is not the design goal.
+
+The project includes restrictions and validation around areas such as:
+
 - Origin handling
-- Trusted extension-side operations
+- User activation
+- Device permission management
+- Authorized-device tracking
 - Protected USB interface classes
-- Security-sensitive USB devices
-- Native Messaging input validation
+- Security-sensitive devices
+- Control-transfer validation
+- Native Messaging protocol validation
+- Trusted extension-side communication
 
-The extension does not treat arbitrary USB access as unrestricted.
+The implementation is intended to prevent arbitrary web pages from treating the native USB backend as unrestricted system access.
 
-Security behavior may change as the project continues to be tested and developed.
+Security behavior may continue to evolve as the project is tested.
 
-## Current Status & Roadmap
+# Origin Handling
 
-- [x] Create repository
-- [x] Technical research & design
-- [x] Implement initial mock logic
-- [x] Minimal working demo
-- [x] Firefox extension implementation
-- [x] Native Messaging integration
-- [x] Python USB backend
-- [x] Core pipeline reaching actual USB communication
-- [x] API-shape improvements
-- [x] Automated tests
-- [ ] Physical device verification & hardware testing 🧪
-- [ ] Broader hardware compatibility testing
-- [ ] API stabilization
+One of the important differences between a browser API and a simple JavaScript polyfill is that device access must remain associated with the requesting site.
 
-## Relationship with Mock-webusb
+`fox-webusb` therefore uses the Firefox extension environment to derive and manage request origins.
+
+The architecture does not simply trust arbitrary origin strings supplied by page JavaScript.
+
+Browser-side information and extension-side request handling are used to associate requests with the relevant page and frame.
+
+This is important because the native host itself does not have direct access to the browser's full page security context.
+
+# Device Permissions
+
+The project follows a permission-oriented model.
+
+A site should not automatically receive unrestricted access to every USB device visible to the operating system.
+
+The intended flow is conceptually:
+
+```text
+Web Page
+    │
+    │ requestDevice()
+    ▼
+Device Selection
+    │
+    ▼
+Permission / Grant
+    │
+    ▼
+Authorized Device
+    │
+    ▼
+getDevices()
+```
+
+`getDevices()` is intended to operate on devices that have already been authorized rather than exposing the complete system USB device list directly to arbitrary pages.
+
+# Hotplug Events
+
+The implementation also includes infrastructure for USB connection monitoring.
+
+When device connection state changes, the project can distribute WebUSB-style events through the extension architecture.
+
+Conceptually:
+
+```text
+USB Device
+    │
+    │ connect / disconnect
+    ▼
+Native Host
+    │
+    ▼
+Background Script
+    │
+    ▼
+Registered Frames
+    │
+    ▼
+navigator.usb
+```
+
+Because the architecture is browser-wide rather than tied to a single embedded browser page, the extension can coordinate events across multiple registered tabs and frames where appropriate.
+
+# Native Acceleration
+
+The repository also contains an optional native acceleration component.
+
+The acceleration layer is intended for operations such as:
+
+- Base64 encoding and decoding
+- Binary protocol helpers
+- Packet packing
+- Packet unpacking
+- Validation helpers
+- Checksum-related operations
+
+The project can retain a non-accelerated implementation path where the optional native component is unavailable.
+
+# TypeScript Definitions
+
+`fox-webusb` includes TypeScript definitions describing the exposed WebUSB-style API.
+
+The definitions are intended to allow projects to reference objects such as:
+
+```typescript
+USBDevice
+USBConfiguration
+USBInterface
+USBEndpoint
+```
+
+without treating the API purely as untyped injected JavaScript.
+
+# Testing
+
+The project contains tests for multiple layers of the implementation.
+
+```text
+Python Tests
+    │
+    ├── USB Bridge
+    ├── Security / Hardening
+    ├── Permission Logic
+    ├── Settings Store
+    ├── Native Messaging Protocol
+    └── End-to-End Native Host Tests
+
+JavaScript Tests
+    │
+    └── Page Polyfill API Behavior
+
+TypeScript Tests
+    │
+    └── API Type Definitions
+
+Rust Tests
+    │
+    └── Optional Native Acceleration
+```
+
+Automated tests are important for validating API behavior and internal architecture.
+
+However:
+
+> Automated tests do not replace testing with real USB hardware.
+
+Physical-device testing remains necessary for validating operating-system behavior, driver interaction, libusb compatibility, device-specific transfer behavior, permission edge cases, real hardware timing, and browser/Native Messaging integration.
+
+# Current Status
+
+## Implemented
+
+- [x] Firefox-oriented architecture
+- [x] Firefox WebExtension
+- [x] Page-side `navigator.usb` polyfill
+- [x] Content-script communication
+- [x] Background-script coordination
+- [x] Firefox Native Messaging integration
+- [x] Native Python host
+- [x] PyUSB/libusb backend integration
+- [x] WebUSB-style object model
+- [x] Device permission management
+- [x] Origin-aware request handling
+- [x] USB transfer handling
+- [x] Security restrictions and validation
+- [x] Hotplug monitoring infrastructure
+- [x] Automated Python tests
+- [x] JavaScript API tests
+- [x] TypeScript definitions
+- [x] Optional native acceleration
+
+## Still Experimental
+
+- [ ] Broad physical USB device verification
+- [ ] Wider operating-system compatibility testing
+- [ ] Device-specific compatibility testing
+- [ ] Long-term API stabilization
+- [ ] Compatibility testing with real WebUSB applications
+
+# Relationship with Mock-webusb
 
 ```text
 Mock-APIs
@@ -198,23 +404,33 @@ Mock-APIs
           └── fox-webusb
 ```
 
-`fox-webusb` is an implementation derived from the Mock-webusb project and is developed as a separate project for Firefox-oriented environments.
+`fox-webusb` shares implementation history and ideas with Mock-webusb but is developed as a separate project with a different browser architecture.
 
-Although the projects share implementation history, `fox-webusb` has its own Firefox-oriented architecture and runtime environment.
+The Firefox environment requires a different transport and integration model.
 
-## Difference from Chromium WebUSB
-
-`fox-webusb` should not be considered a Chromium WebUSB implementation.
-
-The architecture is different:
+Instead of communicating through an embedded browser bridge, `fox-webusb` uses:
 
 ```text
-Chromium WebUSB
+Firefox WebExtension
+        │
+        ▼
+Native Messaging
+        │
+        ▼
+Native USB Backend
+```
 
+This means the project should not be considered merely a renamed copy of another WebUSB implementation.
+
+# Difference from Chromium WebUSB
+
+Chromium WebUSB conceptually operates as part of the browser's native implementation:
+
+```text
 Web Page
     │
     ▼
-Chromium WebUSB
+Browser WebUSB Implementation
     │
     ▼
 Browser USB Backend
@@ -223,9 +439,9 @@ Browser USB Backend
 USB Device
 ```
 
-```text
-fox-webusb
+`fox-webusb` instead uses an external architecture:
 
+```text
 Web Page
     │
     ▼
@@ -235,90 +451,51 @@ Firefox WebExtension
 Native Messaging
     │
     ▼
-Python / PyUSB / libusb
+Native Host
+    │
+    ▼
+PyUSB / libusb
     │
     ▼
 USB Device
 ```
 
-The goal is to provide a compatible WebUSB API surface in Firefox-oriented environments, not to reproduce Chromium's internal implementation.
+The goal is API compatibility where practical.
 
-## Difference from pyside6-webusb
+The goal is **not** to reproduce Chromium's internal WebUSB implementation.
 
-`fox-webusb` shares implementation history and concepts with `pyside6-webusb`, but it is not simply a direct copy.
+# Known Limitations
 
-The runtime environment is different:
+`fox-webusb` is experimental software.
 
-```text
-pyside6-webusb
-    │
-    ▼
-PySide6 / Qt
-    │
-    ▼
-Python USB Backend
-    │
-    ▼
-USB Device
-```
+Important limitations include:
 
-```text
-fox-webusb
-    │
-    ▼
-Firefox WebExtension
-    │
-    ▼
-Native Messaging
-    │
-    ▼
-Python USB Backend
-    │
-    ▼
-USB Device
-```
+- Real hardware compatibility is still being expanded.
+- Behavior can depend on the operating system and USB drivers.
+- PyUSB/libusb behavior may differ from browser-native WebUSB behavior.
+- Isochronous transfers may have backend-specific limitations.
+- Native Messaging introduces transport constraints that do not exist in a native browser implementation.
+- Browser, extension, and native-host setup are all required.
+- API compatibility does not guarantee compatibility with every existing WebUSB application.
 
-The Firefox implementation therefore requires additional components for browser-extension communication and native-host integration.
+# Important Notice
 
-## Testing
+> ⚠️ `fox-webusb` is experimental alpha software.
 
-The project includes automated tests for multiple parts of the implementation.
+Some code in this project may have been generated or assisted by AI.
 
-```text
-Python Tests
-    │
-    ├── Protocol
-    ├── Bridge
-    ├── Security
-    └── USB-related logic
+As a result, the project may contain bugs, incomplete behavior, compatibility differences, security issues that have not yet been discovered, and hardware-specific limitations.
 
-Node.js Tests
-    │
-    └── WebUSB API behavior
+Do not assume that experimental API compatibility is equivalent to production-ready browser-native WebUSB support.
 
-Rust Tests
-    │
-    └── Native acceleration components
-```
+Use appropriate caution when testing with physical hardware.
 
-Automated tests do not replace physical USB device testing.
+# Credits
 
-Compatibility with real USB hardware remains an ongoing area of verification.
+`fox-webusb` is based on implementation history and ideas originating from:
 
-## Important Notice
+- [steck0714/Mock-webusb](https://github.com/steck0714/Mock-webusb)
 
-This project is experimental software.
+# License
 
-Some code may have been generated or assisted by AI. The implementation may therefore contain bugs or limitations and may not work correctly in every environment.
-
-Physical USB device testing has not yet been completed.
-
-Hardware compatibility, browser behavior, and edge cases may differ from native WebUSB implementations.
-
-Use this project for experimentation and development with appropriate caution.
-
-## Credits & License
-
-Derived from [steck0714/Mock-webusb](https://github.com/steck0714/Mock-webusb).
-
-Licensed under the MIT License.
+MIT License.
