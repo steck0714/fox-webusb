@@ -286,10 +286,19 @@ def build_configurations_tree(dev, usb_util) -> list:
                                 }.get(ep_type, "unknown"),
                                 "packetSize": getattr(ep, "wMaxPacketSize", 0),
                             })
-                        except Exception:
+                        except Exception as e:
+                            # 🔍 品質改善(v0.0.0a0、移植元v0.0.4b1のruff指摘を踏襲):
+                            # 以前はここを完全に無言でcontinueしていた。記述子が
+                            # 多少崩れたデバイスでendpointが1つ2つ丸ごと消える場合、
+                            # 原因が一切追えなかった(=「デバイスが繋がっているのに
+                            # 一部のendpointが見えない」という調査困難な状況の温床)。
+                            # 他の箇所(bridge.py)と同じ"例外を無視"表記に揃え、
+                            # 制御フロー(continueして列挙を続ける)自体は変更しない。
+                            print(f"[fox-webusb-host] build_configurations_tree(endpoint): 例外を無視: {e}")
                             continue
                     interfaces_by_number.setdefault(inum, []).append(alt)
-                except Exception:
+                except Exception as e:
+                    print(f"[fox-webusb-host] build_configurations_tree(alternate): 例外を無視: {e}")
                     continue
 
             interfaces_list = [
@@ -309,7 +318,8 @@ def build_configurations_tree(dev, usb_util) -> list:
                 "configurationName": configuration_name,
                 "interfaces": interfaces_list,
             })
-        except Exception:
+        except Exception as e:
+            print(f"[fox-webusb-host] build_configurations_tree(configuration): 例外を無視: {e}")
             continue
     return configurations
 
@@ -423,7 +433,13 @@ def _device_interface_class_tuples(dev) -> list:
                 for intf in cfg:
                     try:
                         tuples.append((intf.bInterfaceClass, intf.bInterfaceSubClass, intf.bInterfaceProtocol))
-                    except Exception:
+                    except Exception as e:
+                        # 🔍 品質改善(v0.0.0a0、移植元v0.0.4b1のruff指摘を踏襲):
+                        # build_configurations_treeと同じ理由で可視化する。この関数は
+                        # フィルタ照合のたびに呼ばれうるため、壊れた記述子を持つ
+                        # デバイスが挿さったままだと繰り返し出力されうる点に注意
+                        # (それでも「一度も分からない」よりは良い)。
+                        print(f"[fox-webusb-host] _device_interface_class_tuples(interface): 例外を無視: {e}")
                         continue
             except Exception:
                 continue

@@ -123,6 +123,11 @@ class _ChooserGui:
 
 
 def main():
+    # 🛡️ 最優先で呼ぶ(README/CHANGELOG参照: 実機検証で見つかったWindows固有の
+    # 不具合への対処)。標準入出力に1バイトでも触れる前に、必ずこれが最初に
+    # 実行される必要がある。
+    protocol.ensure_binary_stdio()
+
     settings = SettingsStore()
     gui = _ChooserGui()
 

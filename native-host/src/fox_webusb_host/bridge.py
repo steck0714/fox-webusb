@@ -197,6 +197,19 @@ class WebUsbNativeBridge:
         # 一斉配信されるのは避けたい。ここで一度だけ静かにpoll()して基準を
         # 作っておくことで、実際にイベントを配送し始めるのは本物の抜き差しが
         # 起きてからになる。
+        #
+        # 🛡️ v0.0.0a0: pyusb(libusb1バックエンド)の実際の初期化タイミングは
+        # 「最初にusb.core.find()系の関数が呼ばれた瞬間」であることが多い。
+        # このプロセスは複数スレッド(ワーカースレッドプール・ホットプラグ
+        # 監視スレッド・GUIスレッドの中のダイアログ更新タイマー)から
+        # それぞれ独立に列挙を呼びうるため、"初回初期化"が複数スレッドから
+        # 完全に同時に起きるレース条件を構造的に排除しておく
+        # (libusb自体はスレッドセーフを謳っているが、その保証の外側にある
+        # Python/ctypesレベルのバックエンド探索・DLL読み込み処理[特にWindows]
+        # まで完全にスレッドセーフだと過信しない、という保守的な判断)。
+        # 列挙はどのみち高頻度な操作ではない(ホットプラグ監視は1.5秒間隔、
+        # チューザーの自動更新も1.5秒間隔)ため、直列化のコストは無視できる。
+        self._enumeration_lock = threading.Lock()
         self._hotplug.poll()
 
     # ============================================================
@@ -259,7 +272,8 @@ class WebUsbNativeBridge:
     # ============================================================
     def _current_device_pairs(self):
         try:
-            return {(d.idVendor, d.idProduct) for d in self._usb_finder()}
+            with self._enumeration_lock:
+                return {(d.idVendor, d.idProduct) for d in self._usb_finder()}
         except Exception:
             return set()
 
@@ -269,9 +283,10 @@ class WebUsbNativeBridge:
         ——シリアル番号まで見た厳密な一意特定はしない、この実装の既知の
         単純化(README参照)。"""
         try:
-            for dev in self._usb_finder():
-                if dev.idVendor == vendor_id and dev.idProduct == product_id:
-                    return dev
+            with self._enumeration_lock:
+                for dev in self._usb_finder():
+                    if dev.idVendor == vendor_id and dev.idProduct == product_id:
+                        return dev
         except Exception:
             pass
         return None
@@ -403,7 +418,9 @@ class WebUsbNativeBridge:
             grants = self._settings.load_granted_origins().get(origin, [])
             granted_pairs = {(g["vendorId"], g["productId"]) for g in grants}
             result = []
-            for dev in self._usb_finder():
+            with self._enumeration_lock:
+                found = list(self._usb_finder())
+            for dev in found:
                 pair = (dev.idVendor, dev.idProduct)
                 if pair in granted_pairs and not device_is_fully_blocked(dev):
                     result.append(build_device_descriptor(dev, usb_util, include_configurations=True))
@@ -430,7 +447,8 @@ class WebUsbNativeBridge:
 
         def candidates():
             try:
-                devices = list(self._usb_finder())
+                with self._enumeration_lock:
+                    devices = list(self._usb_finder())
             except Exception:
                 devices = []
             included = [d for d in devices if device_matches_any_usb_filter(d, usb_util, filters)]
@@ -865,7 +883,8 @@ class WebUsbNativeBridge:
 
     def diagnostics(self, params):
         try:
-            count = len(list(self._usb_finder()))
+            with self._enumeration_lock:
+                count = len(list(self._usb_finder()))
             return {"success": True, "deviceCount": count, "rustAccel": HAVE_RUST_ACCEL}
         except Exception as e:
             return {"success": False, "error": safe_error_str(e)}
