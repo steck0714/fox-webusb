@@ -4,22 +4,20 @@
 
 > ⚠️ **Experimental Alpha — v0.0.0a**
 >
-> `fox-webusb` は、Firefox系環境でWebUSB互換APIを提供することを目的とした、非公式・実験的な実装です。
+> `fox-webusb` は、Firefox系環境でWebUSB互換APIを提供することを目的とした、非公式かつ実験的な実装です。
 >
-> JavaScript APIからネイティブUSBバックエンドまで接続するパイプラインを実装していますが、まだ初期アルファ版であり、実機USBデバイスとの互換性は継続して検証中です。
+> WebUSB風のJavaScript APIからネイティブUSBバックエンドまで接続する構成を実装しています。現在はまだ初期Alpha段階であり、実機USBデバイスとの互換性を継続して検証しています。
 
 ## 概要
 
-`fox-webusb` is an experimental Firefox-oriented implementation derived from the ideas and implementation history of [Mock-webusb](https://github.com/steck0714/Mock-webusb).
+`fox-webusb` は、Mock-webusbに関連する実装履歴やアイデアをもとにした、Firefox向けの実験的なWebUSB互換実装です。
 
-The goal is to provide a WebUSB-compatible API surface in environments where Firefox does not provide a native `navigator.usb` implementation.
+Firefoxにネイティブの `navigator.usb` 実装が存在しない環境で、WebUSBに近いAPIを提供することを目的としています。
 
-This project is not intended to reproduce Chromium's internal WebUSB implementation.
-
-Instead, it builds an alternative architecture around Firefox WebExtensions and Native Messaging:
+本プロジェクトはChromium内部のWebUSB実装を再現するものではありません。代わりに、Firefox WebExtensionとNative Messagingを組み合わせた独自のアーキテクチャを採用しています。
 
 ```text
-Web Page
+Webページ
     │
     │ navigator.usb
     ▼
@@ -34,38 +32,38 @@ Native Host
 PyUSB / libusb
     │
     ▼
-USB Device
+USBデバイス
 ```
 
-The project is designed to go beyond a purely visual API polyfill and connect WebUSB-style JavaScript operations to an underlying USB communication backend.
+単に `navigator.usb` の見た目だけを再現するポリフィルではなく、WebUSB風のJavaScript操作を実際のUSB通信バックエンドまで接続することを目標にしています。
 
 ## なぜ fox-webusb なのか？
 
-Firefox does not provide a native `navigator.usb` implementation.
+Firefoxにはネイティブの `navigator.usb` 実装がありません。
 
-`fox-webusb` explores whether a WebUSB-compatible API can instead be provided through the combination of:
+`fox-webusb` は、以下を組み合わせることでWebUSB互換APIを提供できるかを実験しています。
 
-- Firefox WebExtensions
-- Page-side JavaScript injection
-- Content-script messaging
-- Background-script coordination
+- Firefox WebExtension
+- ページ側JavaScriptの注入
+- Content Scriptによる通信
+- Background Scriptによる調整
 - Firefox Native Messaging
-- A native USB backend
+- ネイティブUSBバックエンド
 
-This makes `fox-webusb` an architectural experiment as much as a WebUSB compatibility project.
+そのため `fox-webusb` は、WebUSB互換プロジェクトであると同時に、Firefox上でWebUSB風APIを構築するためのアーキテクチャ実験でもあります。
 
 # アーキテクチャ
 
 ```text
 ┌──────────────────────────────┐
-│          Web Page            │
+│          Webページ           │
 │                              │
 │       navigator.usb          │
 └──────────────┬───────────────┘
                │
                ▼
 ┌──────────────────────────────┐
-│      Firefox WebExtension    │
+│    Firefox WebExtension      │
 │                              │
 │  • Page Polyfill             │
 │  • Content Script            │
@@ -91,22 +89,20 @@ This makes `fox-webusb` an architectural experiment as much as a WebUSB compatib
 └──────────────┬───────────────┘
                │
                ▼
-          USB Device
+          USBデバイス
 ```
 
-Unlike a browser-native implementation, multiple components cooperate to expose the API.
-
-The page itself does not communicate directly with the USB backend.
+ブラウザにネイティブ実装されたWebUSBとは異なり、複数のコンポーネントが協力してAPIを提供します。Webページ自体がUSBバックエンドへ直接通信するわけではありません。
 
 # API
 
-`fox-webusb` exposes a WebUSB-compatible API centered around:
+`fox-webusb` は、次のAPIを中心としたWebUSB互換インターフェースを提供します。
 
 ```javascript
 navigator.usb
 ```
 
-The implementation includes WebUSB-style objects such as:
+実装では、以下のようなWebUSBスタイルのオブジェクトを扱います。
 
 ```text
 USB
@@ -126,9 +122,9 @@ USBIsochronousOutTransferResult
 USBIsochronousInTransferPacket
 ```
 
-The project aims to reproduce the observable API shape and behavior of WebUSB where practical.
+可能な範囲でWebUSB APIの外部から観測できる形状や挙動を再現することを目標としています。
 
-Example:
+例:
 
 ```javascript
 if (!navigator.usb) {
@@ -140,52 +136,46 @@ const devices = await navigator.usb.getDevices();
 console.log("Authorized USB devices:", devices);
 ```
 
-For device selection, applications use the familiar WebUSB-style flow:
+デバイス選択も、WebUSBに近い形式で行います。
 
 ```javascript
 const device = await navigator.usb.requestDevice({
     filters: [
-        {
-            vendorId: 0x1234
-        }
+        { vendorId: 0x1234 }
     ]
 });
 
 console.log(device);
 ```
 
-Actual device availability depends on the extension, native host, operating system, USB permissions, and backend support.
+実際に利用できるデバイスは、Extension、Native Host、OS、USB権限、ドライバ、バックエンドの対応状況などに依存します。
 
 # USB通信
 
-The native backend is designed to support operations including:
+ネイティブバックエンドでは、主に以下の操作を扱うことを目標としています。
 
-- USB device enumeration
-- Device opening
-- Device closing
-- Configuration selection
-- Interface claiming
-- Interface release
-- Alternate interface selection
-- Control transfers
-- Bulk transfers
-- Interrupt transfers
-- Isochronous transfer support where available
-- Endpoint halt handling
-- Device reset operations
+- USBデバイスの列挙
+- デバイスのオープンとクローズ
+- Configurationの選択
+- InterfaceのClaimとRelease
+- Alternate Interfaceの選択
+- Control Transfer
+- Bulk Transfer
+- Interrupt Transfer
+- 対応環境でのIsochronous Transfer
+- Endpoint Haltの処理
+- Device Reset
 
-The exact behavior of some operations depends on the capabilities and semantics of the underlying PyUSB/libusb environment.
-
-Therefore, compatibility should not yet be considered identical to a browser-native WebUSB implementation.
+一部の挙動は、PyUSB/libusbバックエンドの機能や仕様に依存します。そのため、現時点ではブラウザネイティブのWebUSBと完全に同一の互換性を保証するものではありません。
 
 # Native Messaging
 
-Firefox WebExtensions cannot directly perform arbitrary native USB operations.
+Firefox WebExtensionは、通常のJavaScriptだけで任意のネイティブUSB操作を直接実行することはできません。
 
-`fox-webusb` therefore uses Firefox Native Messaging:
+そのため `fox-webusb` ではFirefox Native Messagingを利用します。
 
 ```text
-Web Page
+Webページ
     │
     ▼
 Page Polyfill
@@ -206,81 +196,69 @@ fox-webusb Native Host
 USB Backend
 ```
 
-The native host acts as the boundary between the browser environment and the USB backend.
-
-The implementation includes protocol validation and message-size handling for communication between the extension and the native process.
-
-Large payload handling may use encoded and chunked transport formats depending on the operation.
+Native Hostは、ブラウザ環境とUSBバックエンドの境界となります。通信レイヤーでは、プロトコル検証やメッセージサイズの制約を扱います。
 
 # セキュリティモデル
 
-Because `fox-webusb` can reach native USB functionality, unrestricted device access is not the design goal.
+`fox-webusb` はネイティブUSB機能まで到達できるため、無制限なデバイスアクセスを目的としていません。
 
-The project includes restrictions and validation around areas such as:
+実装では、次のような領域に対する制限や検証を行います。
 
-- Origin handling
-- User activation
-- Device permission management
-- Authorized-device tracking
-- Protected USB interface classes
-- Security-sensitive devices
-- Control-transfer validation
-- Native Messaging protocol validation
-- Trusted extension-side communication
+- Originの処理
+- User Activation
+- デバイス権限管理
+- 許可済みデバイスの管理
+- 保護対象USB Interface Class
+- セキュリティ上注意が必要なデバイス
+- Control Transferの検証
+- Native Messagingプロトコルの検証
+- 信頼されたExtension側通信
 
-The implementation is intended to prevent arbitrary web pages from treating the native USB backend as unrestricted system access.
-
-Security behavior may continue to evolve as the project is tested.
+任意のWebページがNative Hostを無制限のシステムUSB APIとして扱えないようにすることを意図しています。
 
 # Origin処理
 
-One of the important differences between a browser API and a simple JavaScript polyfill is that device access must remain associated with the requesting site.
+ブラウザAPIでは、デバイス要求と、その要求を行ったサイトとの関係を保持する必要があります。
 
-`fox-webusb` therefore uses the Firefox extension environment to derive and manage request origins.
+`fox-webusb` では、Firefox Extension環境を利用してリクエスト元のOriginを取得・管理します。ページ側JavaScriptが任意に指定したOrigin文字列を、そのまま無条件で信用する設計ではありません。
 
-The architecture does not simply trust arbitrary origin strings supplied by page JavaScript.
-
-Browser-side information and extension-side request handling are used to associate requests with the relevant page and frame.
-
-This is important because the native host itself does not have direct access to the browser's full page security context.
+ブラウザ側で取得できる情報とExtension側のリクエスト処理を利用し、リクエストを対応するページやFrameと関連付けます。
 
 # デバイス権限
 
-The project follows a permission-oriented model.
+本プロジェクトは、権限を意識したデバイスアクセスモデルを採用しています。
 
-A site should not automatically receive unrestricted access to every USB device visible to the operating system.
+WebサイトがOS上で認識されているすべてのUSBデバイスへ自動的に無制限アクセスできるようにすることが目的ではありません。
 
-The intended flow is conceptually:
+概念的な流れは次のとおりです。
 
 ```text
-Web Page
+Webページ
     │
     │ requestDevice()
     ▼
-Device Selection
+デバイス選択
     │
     ▼
-Permission / Grant
+権限の許可
     │
     ▼
-Authorized Device
+許可済みデバイス
     │
     ▼
 getDevices()
 ```
 
-`getDevices()` is intended to operate on devices that have already been authorized rather than exposing the complete system USB device list directly to arbitrary pages.
+`getDevices()` は、任意のWebページへシステム上のUSBデバイス一覧を直接公開するのではなく、すでに許可されたデバイスを扱うことを想定しています。
 
 # Hotplugイベント
 
-The implementation also includes infrastructure for USB connection monitoring.
+USBデバイスの接続状態変化を監視するための基盤も含まれています。
 
-When device connection state changes, the project can distribute WebUSB-style events through the extension architecture.
-
-Conceptually:
+概念的には次のような経路です。
 
 ```text
-USB Device
+USBデバイス
     │
     │ connect / disconnect
     ▼
@@ -290,34 +268,33 @@ Native Host
 Background Script
     │
     ▼
-Registered Frames
+登録済みFrame
     │
     ▼
 navigator.usb
 ```
 
-Because the architecture is browser-wide rather than tied to a single embedded browser page, the extension can coordinate events across multiple registered tabs and frames where appropriate.
+Extensionアーキテクチャを利用して、登録されたTabやFrameに対して関連するイベントを調整・配信できます。
 
 # Native Acceleration
 
-The repository also contains an optional native acceleration component.
+リポジトリには、オプションのネイティブアクセラレーション層も含まれています。
 
-The acceleration layer is intended for operations such as:
+対象には、次のような処理があります。
 
-- Base64 encoding and decoding
-- Binary protocol helpers
-- Packet packing
-- Packet unpacking
-- Validation helpers
-- Checksum-related operations
+- Base64エンコードとデコード
+- バイナリプロトコル処理
+- パケットのPack / Unpack
+- Validation Helper
+- Checksum関連処理
 
-The project can retain a non-accelerated implementation path where the optional native component is unavailable.
+アクセラレーション層は必須依存ではなく、オプションとして利用することを想定しています。
 
 # TypeScript定義
 
-`fox-webusb` includes TypeScript definitions describing the exposed WebUSB-style API.
+`fox-webusb` には、公開するWebUSBスタイルAPIを記述するTypeScript定義が含まれています。
 
-The definitions are intended to allow projects to reference objects such as:
+例えば、以下のようなオブジェクトを型情報付きで参照できます。
 
 ```typescript
 USBDevice
@@ -326,15 +303,14 @@ USBInterface
 USBEndpoint
 ```
 
-without treating the API purely as untyped injected JavaScript.
+これにより、APIを単なる型なしの注入JavaScriptとして扱う必要がありません。
 
 # テスト
 
-The project contains tests for multiple layers of the implementation.
+プロジェクトには、複数の実装レイヤーに対するテストが含まれています。
 
 ```text
 Python Tests
-    │
     ├── USB Bridge
     ├── Security / Hardening
     ├── Permission Logic
@@ -343,72 +319,55 @@ Python Tests
     └── End-to-End Native Host Tests
 
 JavaScript Tests
-    │
     └── Page Polyfill API Behavior
 
 TypeScript Tests
-    │
     └── API Type Definitions
 
 Rust Tests
-    │
     └── Optional Native Acceleration
 ```
 
-Automated tests are important for validating API behavior and internal architecture.
+自動テストは重要ですが、実機USBデバイスでの検証を置き換えるものではありません。
 
-However:
-
-> Automated tests do not replace testing with real USB hardware.
-
-Physical-device testing remains necessary for validating operating-system behavior, driver interaction, libusb compatibility, device-specific transfer behavior, permission edge cases, real hardware timing, and browser/Native Messaging integration.
+OSごとの挙動、USBドライバ、libusb互換性、デバイス固有のTransfer挙動、タイミング、権限処理の境界ケース、FirefoxとNative Messagingの統合などは、実機による確認が必要です。
 
 # 現在の状態
 
 ## 実装済み
 
-- [x] Firefox-oriented architecture
+- [x] Firefox向けアーキテクチャ
 - [x] Firefox WebExtension
-- [x] Page-side `navigator.usb` polyfill
-- [x] Content-script communication
-- [x] Background-script coordination
-- [x] Firefox Native Messaging integration
-- [x] Native Python host
-- [x] PyUSB/libusb backend integration
-- [x] WebUSB-style object model
-- [x] Device permission management
-- [x] Origin-aware request handling
-- [x] USB transfer handling
-- [x] Security restrictions and validation
-- [x] Hotplug monitoring infrastructure
-- [x] Automated Python tests
-- [x] JavaScript API tests
-- [x] TypeScript definitions
-- [x] Optional native acceleration
+- [x] ページ側 `navigator.usb` ポリフィル
+- [x] Content Script通信
+- [x] Background Scriptによる調整
+- [x] Firefox Native Messaging統合
+- [x] Python Native Host
+- [x] PyUSB/libusbバックエンド統合
+- [x] WebUSBスタイルのオブジェクトモデル
+- [x] デバイス権限管理
+- [x] Originを考慮したリクエスト処理
+- [x] USB Transfer処理
+- [x] セキュリティ制限と検証
+- [x] Hotplug監視基盤
+- [x] Python自動テスト
+- [x] JavaScript APIテスト
+- [x] TypeScript定義
+- [x] オプションのNative Acceleration
 
 ## まだ実験段階
 
-- [ ] Broad physical USB device verification
-- [ ] Wider operating-system compatibility testing
-- [ ] Device-specific compatibility testing
-- [ ] Long-term API stabilization
-- [ ] Compatibility testing with real WebUSB applications
+- [ ] 幅広い実機USBデバイスでの検証
+- [ ] より広いOS互換性テスト
+- [ ] デバイス固有の互換性テスト
+- [ ] 長期的なAPI安定化
+- [ ] 実際のWebUSBアプリケーションとの互換性検証
 
 # Mock-webusbとの関係
 
-```text
-Mock-APIs
-    │
-    └── Mock-webusb
-          │
-          └── fox-webusb
-```
+`fox-webusb` はMock-webusbと実装履歴やアイデアを共有していますが、異なるブラウザアーキテクチャを採用する独立したプロジェクトです。
 
-`fox-webusb` shares implementation history and ideas with Mock-webusb but is developed as a separate project with a different browser architecture.
-
-The Firefox environment requires a different transport and integration model.
-
-Instead of communicating through an embedded browser bridge, `fox-webusb` uses:
+Firefox環境では、通信経路と統合方法が異なります。
 
 ```text
 Firefox WebExtension
@@ -420,14 +379,14 @@ Native Messaging
 Native USB Backend
 ```
 
-This means the project should not be considered merely a renamed copy of another WebUSB implementation.
+そのため、単に別のWebUSB実装を改名しただけのものではありません。
 
 # Chromium WebUSBとの違い
 
-Chromium WebUSB conceptually operates as part of the browser's native implementation:
+ChromiumのWebUSBは、概念的にはブラウザ内部のネイティブ実装として動作します。
 
 ```text
-Web Page
+Webページ
     │
     ▼
 Browser WebUSB Implementation
@@ -436,13 +395,13 @@ Browser WebUSB Implementation
 Browser USB Backend
     │
     ▼
-USB Device
+USBデバイス
 ```
 
-`fox-webusb` instead uses an external architecture:
+一方、`fox-webusb` は次のような構成です。
 
 ```text
-Web Page
+Webページ
     │
     ▼
 Firefox WebExtension
@@ -457,44 +416,40 @@ Native Host
 PyUSB / libusb
     │
     ▼
-USB Device
+USBデバイス
 ```
 
-The goal is API compatibility where practical.
-
-The goal is **not** to reproduce Chromium's internal WebUSB implementation.
+目標は可能な範囲でのAPI互換性であり、Chromium内部のWebUSB実装そのものを再現することではありません。
 
 # 既知の制限
 
-`fox-webusb` is experimental software.
+`fox-webusb` は実験的なソフトウェアです。
 
-Important limitations include:
+主な制限には次のようなものがあります。
 
-- Real hardware compatibility is still being expanded.
-- Behavior can depend on the operating system and USB drivers.
-- PyUSB/libusb behavior may differ from browser-native WebUSB behavior.
-- Isochronous transfers may have backend-specific limitations.
-- Native Messaging introduces transport constraints that do not exist in a native browser implementation.
-- Browser, extension, and native-host setup are all required.
-- API compatibility does not guarantee compatibility with every existing WebUSB application.
+- 実機ハードウェアとの互換性は継続して検証中
+- OSやUSBドライバによって挙動が異なる可能性
+- PyUSB/libusbの挙動がブラウザネイティブWebUSBと異なる可能性
+- Isochronous Transferにはバックエンド固有の制限がある可能性
+- Native Messaging固有の通信制約
+- Browser、Extension、Native Hostのセットアップが必要
+- API形状が互換でも、すべての既存WebUSBアプリケーションの動作を保証するものではない
 
 # ⚠️ 注意事項
 
-> ⚠️ `fox-webusb` is experimental alpha software.
+> ⚠️ `fox-webusb` はExperimental Alpha Softwareです。
 
-Some code in this project may have been generated or assisted by AI.
+本プロジェクトには、AIによって生成されたコード、またはAIの支援を受けたコードが含まれる場合があります。
 
-As a result, the project may contain bugs, incomplete behavior, compatibility differences, security issues that have not yet been discovered, and hardware-specific limitations.
+そのため、バグ、未完成の挙動、互換性の違い、未発見のセキュリティ上の問題、デバイス固有の制限などが存在する可能性があります。
 
-Do not assume that experimental API compatibility is equivalent to production-ready browser-native WebUSB support.
+実験的なAPI互換性が、そのまま本番環境向けのブラウザネイティブWebUSB品質を意味するものではありません。
 
-Use appropriate caution when testing with physical hardware.
+実機ハードウェアを使用する際は、十分注意してテストしてください。
 
 # Credits
 
-`fox-webusb` is based on implementation history and ideas originating from:
-
-- [steck0714/Mock-webusb](https://github.com/steck0714/Mock-webusb)
+`fox-webusb` は、Mock-webusbに関連する実装履歴やアイデアをもとにしています。
 
 # License
 
