@@ -6,7 +6,7 @@
  * 'toContent'方向のメッセージを見つけたら、テストごとに用意した
  * フェイクのcontent_script/background/ネイティブホストの振る舞い
  * (mockDispatch)へ回して結果を'toPage'として投げ返す——これにより、
- * 実際のpage_polyfill.jsのコード(callBridge、OpenWebUSBDevice、
+ * 実際のpage_polyfill.jsのコード(callBridge、USBDevice、
  * throwFromResult、base64変換等)を一切書き換えずに丸ごと検証できる。
  *
  * 移植元(pyside6-webusb)のtests/test_polyfill.jsが、QWebChannelの
@@ -63,9 +63,10 @@ function makeSandbox(mockDispatch, opts) {
   const sandbox = {
     window, navigator, document: { location: window.location },
     DOMException: global.DOMException,
+    EventTarget: global.EventTarget, Event: global.Event,
     btoa: global.btoa, atob: global.atob,
     Uint8Array, Int8Array, DataView, ArrayBuffer, TextEncoder, TextDecoder,
-    Promise, Object, Array, JSON, Math, Error, TypeError, RangeError, String, Number, Boolean,
+    Promise, Object, Array, JSON, Math, Error, TypeError, RangeError, String, Number, Boolean, Symbol,
     setTimeout, clearTimeout, console,
   };
   vm.createContext(sandbox);
@@ -281,9 +282,17 @@ const SIMPLE_DEVICE = {
   });
 
   await run('combineRequestType rejects unknown requestType/recipient strings', async () => {
-    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    const { navigator } = makeSandbox((method) => {
+      if (method === 'listDevices') return { devices: [SIMPLE_DEVICE] };
+      if (method === 'openDevice') return { success: true, handle: 1 };
+      throw new Error('unexpected method ' + method);
+    });
     const [device] = await navigator.usb.getDevices();
-    device._opened = true; // requireOpen()を通すためのテスト用の直接操作
+    await device.open();
+    // 🆕 v0.0.0a0: #openedは本物のプライベートフィールドになったため、
+    // 以前のようにdevice._opened = trueで外から偽装することはできない
+    // (実際にopen()を通す必要がある——これ自体がカプセル化が効いている
+    // ことの確認でもある)。
     await assert.rejects(
       () => device.controlTransferIn({ requestType: 'nonsense', recipient: 'device', request: 1, value: 0, index: 0 }, 1),
       (err) => err instanceof global.TypeError,
@@ -310,7 +319,9 @@ const SIMPLE_DEVICE = {
     await device.open();
     const result = await device.isochronousTransferIn(1, [4, 4]);
     assert.strictEqual(result.packets.length, 2);
-    assert.strictEqual(result.packets[0].length, 4);
+    assert.strictEqual(result.packets[0].data.byteLength, 4);
+    assert.strictEqual(Buffer.from(result.packets[0].data.buffer, result.packets[0].data.byteOffset, 4).toString('utf8'), 'AAAA');
+    assert.strictEqual(Buffer.from(result.packets[1].data.buffer, result.packets[1].data.byteOffset, 4).toString('utf8'), 'BBBB');
     const combined = Buffer.from(result.data.buffer);
     assert.strictEqual(combined.toString('utf8'), 'AAAABBBB');
   });
@@ -384,4 +395,199 @@ const SIMPLE_DEVICE = {
     assert.deepStrictEqual(calls, ['listDevices', 'openDevice', 'forgetGrantedDevice', 'closeDevice']);
     assert.strictEqual(device.opened, false);
   });
+
+  // ============================================================
+  // 🆕 v0.0.0a0: 深い型検証への耐性(devtoolsで prototype/toStringTag を
+  // 掘られても、本物のブラウザ実装と見分けがつきにくいことの検証)。
+  // 実際にF12でnavigator.usbを調べた方からのフィードバックがきっかけ。
+  // ============================================================
+
+  await run('navigator.usb is a real EventTarget (instanceof, prototype chain)', async () => {
+    const { navigator, EventTarget } = makeSandbox(() => ({}));
+    assert.strictEqual(navigator.usb instanceof EventTarget, true);
+    const proto = Object.getPrototypeOf(Object.getPrototypeOf(navigator.usb));
+    assert.strictEqual(proto, EventTarget.prototype);
+  });
+
+  await run('navigator.usb identifies as "USB" under deep introspection', async () => {
+    const { navigator } = makeSandbox(() => ({}));
+    assert.strictEqual(navigator.usb.constructor.name, 'USB');
+    assert.strictEqual(navigator.usb[Symbol.toStringTag], 'USB');
+    assert.strictEqual(Object.prototype.toString.call(navigator.usb), '[object USB]');
+  });
+
+  await run('navigator.usb inherits the real addEventListener/removeEventListener (not a hand-rolled override)', async () => {
+    const { navigator, EventTarget } = makeSandbox(() => ({}));
+    assert.strictEqual(navigator.usb.addEventListener, EventTarget.prototype.addEventListener);
+    assert.strictEqual(navigator.usb.removeEventListener, EventTarget.prototype.removeEventListener);
+    assert.strictEqual(typeof navigator.usb.dispatchEvent, 'function');
+  });
+
+  await run('a USBDevice instance identifies as "USBDevice" under deep introspection', async () => {
+    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    const [device] = await navigator.usb.getDevices();
+    assert.strictEqual(device.constructor.name, 'USBDevice');
+    assert.strictEqual(device[Symbol.toStringTag], 'USBDevice');
+    assert.strictEqual(Object.prototype.toString.call(device), '[object USBDevice]');
+  });
+
+  await run('nested USBConfiguration/USBInterface/USBEndpoint identify correctly under deep introspection', async () => {
+    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    const [device] = await navigator.usb.getDevices();
+    const cfg = device.configurations[0];
+    const iface = cfg.interfaces[0];
+    const alt = iface.alternates[0];
+    const ep = alt.endpoints[0];
+    assert.strictEqual(Object.prototype.toString.call(cfg), '[object USBConfiguration]');
+    assert.strictEqual(Object.prototype.toString.call(iface), '[object USBInterface]');
+    assert.strictEqual(Object.prototype.toString.call(alt), '[object USBAlternateInterface]');
+    assert.strictEqual(Object.prototype.toString.call(ep), '[object USBEndpoint]');
+  });
+
+  await run('dispatched connect/disconnect events are real USBConnectionEvent (extends Event) instances', async () => {
+    const sandbox = makeSandbox(() => ({}));
+    const { navigator, Event } = sandbox;
+    let received = null;
+    navigator.usb.addEventListener('connect', (evt) => { received = evt; });
+    pushEvent(sandbox, 'connect', SIMPLE_DEVICE);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(received);
+    assert.strictEqual(received instanceof Event, true);
+    assert.strictEqual(received.type, 'connect');
+    assert.strictEqual(Object.prototype.toString.call(received), '[object USBConnectionEvent]');
+    assert.strictEqual(received.device.vendorId, 0x1111);
+  });
+
+  await run('onconnect/ondisconnect behave as single-slot IDL event handler attributes', async () => {
+    const sandbox = makeSandbox(() => ({}));
+    const { navigator } = sandbox;
+    let firstCalls = 0;
+    let secondCalls = 0;
+    navigator.usb.onconnect = () => { firstCalls++; };
+    assert.strictEqual(typeof navigator.usb.onconnect, 'function');
+    // 再代入すると、以前のハンドラは自動的に外れる(2つとも同時には効かない)。
+    navigator.usb.onconnect = () => { secondCalls++; };
+    pushEvent(sandbox, 'connect', SIMPLE_DEVICE);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.strictEqual(firstCalls, 0);
+    assert.strictEqual(secondCalls, 1);
+    // nullを代入すれば解除できる。
+    navigator.usb.ondisconnect = null;
+    assert.strictEqual(navigator.usb.ondisconnect, null);
+  });
+
+  await run('onconnect handler and an addEventListener()-registered listener both fire', async () => {
+    const sandbox = makeSandbox(() => ({}));
+    const { navigator } = sandbox;
+    const order = [];
+    navigator.usb.addEventListener('connect', () => order.push('listener'));
+    navigator.usb.onconnect = () => order.push('onconnect');
+    pushEvent(sandbox, 'connect', SIMPLE_DEVICE);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.strictEqual(order.length, 2);
+    assert.ok(order.includes('listener'));
+    assert.ok(order.includes('onconnect'));
+  });
+
+  await run('USBInTransferResult/USBOutTransferResult identify correctly under deep introspection', async () => {
+    const { navigator } = makeSandbox((method) => {
+      if (method === 'listDevices') return { devices: [SIMPLE_DEVICE] };
+      if (method === 'openDevice') return { success: true, handle: 1 };
+      if (method === 'bulkTransferIn') return { success: true, status: 'ok', data: Buffer.from('hi').toString('base64') };
+      if (method === 'bulkTransferOut') return { success: true, status: 'ok', bytesWritten: 2 };
+      throw new Error('unexpected method ' + method);
+    });
+    const [device] = await navigator.usb.getDevices();
+    await device.open();
+    const inResult = await device.transferIn(1, 8);
+    const outResult = await device.transferOut(2, new Uint8Array([1, 2]));
+    assert.strictEqual(Object.prototype.toString.call(inResult), '[object USBInTransferResult]');
+    assert.strictEqual(Object.prototype.toString.call(outResult), '[object USBOutTransferResult]');
+  });
+
+  // ============================================================
+  // 🆕 v0.0.0a0 (続き): 「chrome webusbでnavigator.usbの有無を調べる際に
+  // 考えられるチェック」への追加対策。private fieldsによる内部状態の
+  // 完全な不可視化、.prototypeの不在(class構文のメソッドは非コンストラクタ
+  // 関数になるため)、Function.prototype.toString()の偽装を検証する。
+  // ============================================================
+
+  await run('no internal state leaks via Object.keys()/getOwnPropertyNames() on navigator.usb', async () => {
+    const { navigator } = makeSandbox(() => ({}));
+    assert.deepStrictEqual(Object.keys(navigator.usb), []);
+    // getOwnPropertyNames()はenumerable:falseなものも拾うので、より厳しい確認になる。
+    // #フィールドは真のプライベートなので、これにも一切出てこないはず。
+    const ownNames = Object.getOwnPropertyNames(navigator.usb);
+    assert.ok(!ownNames.some((n) => n.includes('onconnect') || n.includes('ondisconnect') || n.startsWith('#')));
+  });
+
+  await run('no internal state leaks via Object.keys()/getOwnPropertyNames() on a USBDevice instance', async () => {
+    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    const [device] = await navigator.usb.getDevices();
+    const keys = Object.keys(device).sort();
+    // 仕様どおりの読み取り専用属性だけが出るべきで、handle/opened/
+    // claimedInterfaces等の内部実装詳細は一切出てはいけない。
+    const expected = [
+      'configurations', 'deviceClass', 'deviceProtocol', 'deviceSubclass',
+      'deviceVersionMajor', 'deviceVersionMinor', 'deviceVersionSubminor',
+      'manufacturerName', 'productId', 'productName', 'serialNumber',
+      'usbVersionMajor', 'usbVersionMinor', 'usbVersionSubminor', 'vendorId',
+    ].sort();
+    assert.deepStrictEqual(keys, expected);
+    const ownNames = Object.getOwnPropertyNames(device);
+    assert.ok(!ownNames.some((n) => n.includes('handle') || n.includes('claimed') || n.includes('Alternate') || n.startsWith('#')));
+  });
+
+  await run('exposed methods have no .prototype property (matching native, non-constructible operations)', async () => {
+    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    assert.strictEqual(navigator.usb.getDevices.prototype, undefined);
+    assert.strictEqual(navigator.usb.requestDevice.prototype, undefined);
+    const [device] = await navigator.usb.getDevices();
+    assert.strictEqual(device.open.prototype, undefined);
+    assert.strictEqual(device.transferIn.prototype, undefined);
+  });
+
+  await run('exposed methods are not constructible (new x() throws, matching native operations)', async () => {
+    const { navigator } = makeSandbox(() => ({}));
+    assert.throws(() => new navigator.usb.getDevices(), TypeError);
+    assert.throws(() => new navigator.usb.requestDevice(), TypeError);
+  });
+
+  await run('Function.prototype.toString() on exposed methods reports as native code', async () => {
+    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    assert.strictEqual(navigator.usb.getDevices.toString(), 'function getDevices() { [native code] }');
+    assert.strictEqual(navigator.usb.requestDevice.toString(), 'function requestDevice() { [native code] }');
+    assert.strictEqual(String(navigator.usb.getDevices), 'function getDevices() { [native code] }');
+    const [device] = await navigator.usb.getDevices();
+    assert.strictEqual(device.open.toString(), 'function open() { [native code] }');
+    assert.strictEqual(device.transferIn.toString(), 'function transferIn() { [native code] }');
+    // addEventListener/removeEventListenerには一切手を加えておらず、EventTarget.prototype
+    // から継承したものをそのまま使っている(前の "inherits the real ..." テストで確認済み)。
+    // そのためこれらの.toString()結果は実ブラウザのEventTarget実装がそのまま出るだけで、
+    // fox-webusb側のコードには依存しない——Node自身のEventTargetは(実ブラウザと違い)
+    // 純粋なJS実装なので、ここでは意図的に検証対象から外している。
+  });
+
+  await run('toString-spoofing proxy is fully transparent to normal calls (this-binding, args, return value)', async () => {
+    const captured = [];
+    const { navigator } = makeSandbox((method, params) => {
+      captured.push([method, params]);
+      if (method === 'listDevices') return { devices: [SIMPLE_DEVICE] };
+      if (method === 'openDevice') return { success: true, handle: 42 };
+      throw new Error('unexpected method ' + method);
+    });
+    const [device] = await navigator.usb.getDevices();
+    // メソッドを変数へ取り出してから呼んでも(=thisを明示的に渡しても)正しく動くこと
+    const openFn = device.open;
+    await openFn.call(device);
+    assert.strictEqual(device.opened, true);
+  });
+
+  await run('method arity (.length) matches the WebIDL operation signature', async () => {
+    const { navigator } = makeSandbox(() => ({ devices: [SIMPLE_DEVICE] }));
+    assert.strictEqual(navigator.usb.getDevices.length, 0);
+    assert.strictEqual(navigator.usb.requestDevice.length, 1);
+  });
+
+
 })();
