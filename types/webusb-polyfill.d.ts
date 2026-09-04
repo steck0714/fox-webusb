@@ -90,7 +90,7 @@ interface USBIsochronousInTransferPacket {
 
 interface USBIsochronousInTransferResult {
   readonly data: DataView;
-  readonly packets: ReadonlyArray<{ length: number; status: USBTransferStatus }>;
+  readonly packets: ReadonlyArray<USBIsochronousInTransferPacket>;
 }
 
 interface USBIsochronousOutTransferPacket {

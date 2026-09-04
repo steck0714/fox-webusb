@@ -45,7 +45,7 @@ async function connectAndBlink(): Promise<void> {
 
   const isoResult = await device.isochronousTransferIn(1, [8, 8, 8]);
   for (const packet of isoResult.packets) {
-    console.log(packet.length, packet.status);
+    console.log(packet.data.byteLength, packet.status);
   }
 
   await device.reset();
