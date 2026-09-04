@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fox-webusb-host"
-version = "0.0.0"
+version = "0.0.0a0"
 description = "Firefox native-messaging host for fox-webusb: a WebUSB (navigator.usb) polyfill for Firefox, ported from pyside6-webusb. Talks to real USB hardware via pyusb/libusb on behalf of the fox-webusb WebExtension."
 readme = "../README.md"
 requires-python = ">=3.9"
