@@ -26,6 +26,22 @@
     return v + ':' + p;
   }
 
+  // 以前は '<p class="empty">...</p>' をinnerHTMLへ直接代入していた
+  // (エラーメッセージ側は String(e) を連結していたため動的な値だった)。
+  // textContentだけで組み立てることで、エラー内容にHTMLが含まれていても
+  // 常にプレーンテキストとして表示される。
+  function createEmptyMessage(text) {
+    var p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = text;
+    return p;
+  }
+
+  function showEmptyMessage(container, text) {
+    container.textContent = '';
+    container.appendChild(createEmptyMessage(text));
+  }
+
   function renderStatus() {
     var dot = document.getElementById('statusDot');
     var text = document.getElementById('statusText');
@@ -51,11 +67,11 @@
     var container = document.getElementById('origins');
     container.textContent = '読み込み中…';
     call('listGrantedOrigins').then(function (res) {
-      container.innerHTML = '';
+      container.textContent = '';
       var origins = (res && res.origins) || {};
       var keys = Object.keys(origins);
       if (!keys.length) {
-        container.innerHTML = '<p class="empty">許可されたオリジンはまだありません。</p>';
+        showEmptyMessage(container, '許可されたオリジンはまだありません。');
         return;
       }
       keys.forEach(function (origin) {
@@ -102,7 +118,7 @@
         container.appendChild(block);
       });
     }).catch(function (e) {
-      container.innerHTML = '<p class="empty">読み込みに失敗しました: ' + String(e) + '</p>';
+      showEmptyMessage(container, '読み込みに失敗しました: ' + String(e));
     });
   }
 
@@ -112,12 +128,18 @@
     call('listKnownDevices').then(function (res) {
       var devices = (res && res.devices) || [];
       if (!devices.length) {
-        container.innerHTML = '<p class="empty">履歴はまだありません。</p>';
+        showEmptyMessage(container, '履歴はまだありません。');
         return;
       }
       var table = document.createElement('table');
       var thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th>デバイス</th><th>VID:PID</th><th>接続回数</th><th>最終接続</th><th></th></tr>';
+      var headRow = document.createElement('tr');
+      ['デバイス', 'VID:PID', '接続回数', '最終接続', ''].forEach(function (label) {
+        var th = document.createElement('th');
+        th.textContent = label;
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
       var tbody = document.createElement('tbody');
       devices.sort(function (a, b) { return (b.lastConnected || 0) - (a.lastConnected || 0); });
       devices.forEach(function (d) {
@@ -142,10 +164,10 @@
       });
       table.appendChild(thead);
       table.appendChild(tbody);
-      container.innerHTML = '';
+      container.textContent = '';
       container.appendChild(table);
     }).catch(function (e) {
-      container.innerHTML = '<p class="empty">読み込みに失敗しました: ' + String(e) + '</p>';
+      showEmptyMessage(container, '読み込みに失敗しました: ' + String(e));
     });
   }
 
