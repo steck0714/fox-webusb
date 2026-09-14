@@ -5,6 +5,74 @@ pyside6-webusb の変更履歴(v0.0.1〜v0.0.4b0)は同プロジェクト自身�
 CHANGELOG.md を参照してください。fox-webusbはアーキテクチャが別物になった
 ため、バージョン番号は移植元の系列を引き継がず 0.0.0 から数え直しています。
 
+## [0.0.0.1] - Firefoxアドオンlinter(addons-linter)警告の解消
+
+`web-ext lint`/AMOのvalidatorが検出した6件の警告(errors 0・notices 0・
+warnings 6)を全て解消した、コンプライアンス/堅牢化のみを目的とした修正
+リリース。挙動・見た目の変更は一切ない。
+
+### 修正(`manifest.json`)
+
+- **`version`を`"0.0.0a0"`から`"0.0.0.1"`へ変更**
+  (`VERSION_FORMAT_DEPRECATED`)。Manifest V3以降、バージョン文字列は
+  「ドット区切りの数字1〜4個」のみが許可され、英字を含む`"0.0.0a0"`の
+  ような表記は将来的に使えなくなる。Firefox(Gecko)のバージョン比較規則
+  (未指定の末尾セグメントは`0`として扱われる)の下では
+  `0.0.0 < 0.0.0.1 < 0.0.1`となるため、"0.0.0の直後・0.0.1の手前"という
+  `0.0.0a0`と同じ位置づけを、英字を使わずに4つ目の数字セグメントで表現した。
+- **`browser_specific_settings.gecko.strict_min_version`を`"102.0"`から
+  `"140.0"`へ、`gecko_android.strict_min_version`を新規に`"142.0"`へ設定**
+  (`KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION`・
+  `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`)。
+  `data_collection_permissions`キー(データ収集有無の宣言。2025年11月3日
+  以降にAMOへ新規提出する拡張機能で必須)は、デスクトップ版Firefox 140・
+  Android版Firefox 142で初めて認識されるため、それより低い
+  `strict_min_version`と組み合わせるとlinterが警告する。本拡張は
+  `required: ["none"]`(データ収集なし)を宣言しているため、これを新規
+  ユーザー向けの体験上の要件として見た場合は必須ではないが(Firefox
+  Extension Workshop「Firefox built-in consent for data collection and
+  transmission」参照)、新規拡張機能への公式な推奨(選択肢1: 最小
+  バージョンを引き上げる)にそのまま従った。
+
+### 修正(`no-unsanitized/property` — `UNSAFE_VAR_ASSIGNMENT`、計3件)
+
+- **`popup/popup.js`**: ステータス表示(`<span class="dot"></span>` +
+  テキスト)と、診断情報の行(USBデバイス数・Rustアクセラレーション有無)を
+  組み立てていた`innerHTML`への文字列連結を、`document.createElement`/
+  `textContent`/`createTextNode`による安全なDOM構築に置き換えた。
+- **`options/options.js`**: オリジン一覧・既知デバイス一覧の
+  読み込み失敗時のエラー表示(`String(e)`を`innerHTML`へ直接連結していた
+  箇所、2件)を、`textContent`のみを使う共通ヘルパー
+  (`createEmptyMessage`/`showEmptyMessage`)経由に置き換えた。あわせて、
+  空状態メッセージや履歴テーブルのヘッダ行など、動的な値を含まないため
+  linterには指摘されていなかった`innerHTML`代入も、同じファイル内で
+  混在させないよう安全なDOM構築へ統一した。表示されるHTML構造・CSS
+  クラスは変更前と完全に同一。
+
+### その他(linterの指摘とは別に、修正の検証中に発見)
+
+- **`native-host/pyproject.toml`の`readme = "../README.md"`を削除**。
+  パッケージルート(`native-host/`)の外にあるファイルを指しており、
+  README本文が案内する`pip install -e .`が、setuptoolsの
+  `read_files`のパス安全チェック(パッケージルート外のファイル読み込みを
+  拒否する)に引っかかって失敗する状態になっていた(`requires =
+  ["setuptools>=68"]`が固定する下限より新しいsetuptoolsでは常に発生する)。
+  ローカル用途のパッケージでPyPI公開の予定もないため、`readme`
+  フィールド自体を削除して解消した。この修正の検証も兼ねて、
+  実際に仮想環境を作って`pip install -e ".[dev]"`を実行し、
+  Python側の既存テストスイート93件(`tests/`、
+  `test_end_to_end_subprocess.py`含む)が全て通過することを確認済み。
+- 上記2点に伴い、`native-host/pyproject.toml`の`version`と
+  `fox_webusb_host/__init__.py`の`__version__`/docstringも
+  `0.0.0.1`へ更新し、`manifest.json`と揃えた。
+
+### 検証
+
+- `addons-linter`を実際にインストールし、修正前の`extension/`に対して
+  実行して報告された6件の警告(内容・件数とも)が再現することを確認した
+  上で、修正後の`extension/`に対して同じツールを再実行し、
+  `errors 0 / notices 0 / warnings 0`になることを確認した。
+
 ## [0.0.0a0] - 実機検証フィードバックに基づく修正リリース
 
 移植元を pyside6-webusb v0.0.4b1 へ追従させつつ、実際にWindows +
