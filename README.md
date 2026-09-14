@@ -428,6 +428,113 @@ cd types && npx tsc --noEmit --strict --lib es2020,dom webusb-polyfill.d.ts samp
 いずれも実USBデバイス・実Firefoxを必要としない、ロジック単体の検証です
 (前述「既知の限界」参照)。
 
+## 🐍 Native Host のセットアップ
+
+fox-webusb は Firefox WebExtension だけでは動作しません。
+
+WebUSB API と USB デバイスとの通信には、別途 **Native Messaging Host** が必要です。
+
+Native Host は XPI に含まれていないため、GitHub リポジトリからプロジェクトを取得し、セットアップスクリプトを実行してください。
+
+### 必要なもの
+
+- Python 3.9 以降
+- Git
+- USB 通信に必要なバックエンド（環境によって libusb など）
+
+### セットアップ
+
+まず、GitHub リポジトリを取得します。
+
+```bash
+git clone https://github.com/steck0714/fox-webusb.git
+cd fox-webusb/native-host
+```
+
+その後、`setup_env.py` を実行します。
+
+#### Windows
+
+```powershell
+py setup_env.py
+```
+
+または、
+
+```powershell
+python setup_env.py
+```
+
+#### macOS / Linux
+
+```bash
+python3 setup_env.py
+```
+
+### `setup_env.py` が行うこと
+
+`setup_env.py` は、Native Host を動作させるための環境を自動的に準備します。
+
+主に以下の処理を行います。
+
+1. Python 仮想環境（venv）を作成
+2. 仮想環境内の `pip` を更新
+3. `fox-webusb-host` と必要な Python パッケージをインストール
+4. USB バックエンドの状態を確認
+5. Native Messaging Host を Firefox に登録
+
+セットアップ後は、Firefox WebExtension から Native Messaging を通して Native Host が起動されます。
+
+### Native Host の構成
+
+```text
+Firefox WebExtension
+        │
+        │ Native Messaging
+        ▼
+fox-webusb Native Host
+        │
+        │ PyUSB
+        ▼
+    USB Device
+```
+
+Native Host は XPI に含まれず、OS 上に別途インストールされます。
+
+### アンインストール
+
+Native Messaging Host の登録を解除する場合は、`uninstall.py` を使用します。
+
+#### Windows
+
+```powershell
+py uninstall.py
+```
+
+または、
+
+```powershell
+python uninstall.py
+```
+
+#### macOS / Linux
+
+```bash
+python3 uninstall.py
+```
+
+### 注意
+
+このセットアップ方式では、Native Host は Python 環境上で動作します。
+
+現時点では、Python を内蔵した `.exe` などの standalone installer は提供していません。
+
+また、USB デバイスとの実際の通信には、OS やデバイスに応じた USB バックエンドやドライバーが必要になる場合があります。
+
+fox-webusb は現在 **experimental / pre-alpha** です。
+
+実機 USB デバイスでの動作状況については、[Verification Log](checklog2.md) を参照してください。
+
 ## ライセンス
 
 MIT。`LICENSE` 参照。移植元 pyside6-webusb と同一ライセンス。
