@@ -1,0 +1,64 @@
+{
+  "extensionName": { "message": "fox-webusb", "description": "拡張機能名(manifest.jsonのname)" },
+  "extensionDescription": { "message": "Firefox上でWebUSB(navigator.usb)互換のポリフィルを提供します。実USBデバイスへのアクセスは、ローカルのネイティブメッセージングホスト(別プロセス)経由で行われます。", "description": "拡張機能の説明文(manifest.jsonのdescription)" },
+
+  "popupTitle": { "message": "fox-webusb" },
+  "statusChecking": { "message": "確認中…" },
+  "statusConnected": { "message": "ネイティブホストに接続済み" },
+  "statusNotConnected": { "message": "ネイティブホストに接続できません" },
+  "statusNotConnectedDetailFallback": { "message": "fox-webusb-host がインストールされていない可能性があります。オプションページの手順を確認してください。" },
+  "labelDeviceCount": { "message": "現在見えているUSBデバイス数" },
+  "labelRustAccel": { "message": "Rustアクセラレーション" },
+  "rustAccelEnabled": { "message": "有効" },
+  "rustAccelDisabled": { "message": "未ビルド(標準base64で動作中)" },
+  "buttonOpenOptions": { "message": "デバイス・許可の管理を開く" },
+  "buttonRetry": { "message": "再接続を試す" },
+
+  "optionsTitle": { "message": "fox-webusb の設定" },
+  "leadTextBeforeLink": { "message": "Firefoxは" },
+  "leadTextCode": { "message": "navigator.usb" },
+  "leadTextMidLink": { "message": "(WebUSB) を実装していません(" },
+  "leadTextLinkLabel": { "message": "Mozillaの公式見解" },
+  "leadTextAfterLink": { "message": "は\"harmful\")。この拡張機能は、ローカルで動くネイティブメッセージングホスト(Pythonプロセス)経由で実USB機器へアクセスすることで、同等のAPIを提供します。" },
+
+  "statusNotConnectedDetailSetup": { "message": "下のセットアップ手順を確認してください。" },
+  "statusUnavailable": { "message": "ステータスを取得できませんでした" },
+
+  "setupHeading": { "message": "セットアップ" },
+  "setupStep1": { "message": "Python 3.9以上がインストールされていることを確認してください。" },
+  "setupStep2Intro": { "message": "このアドオンに同梱されている native-host/ フォルダで、次を実行します:" },
+  "setupStep3Intro": { "message": "(任意・推奨) より高速なbase64処理を使いたい場合は、Rustツールチェイン(rustc/cargo、1.74以上)がある環境で:" },
+  "setupStep3Note": { "message": "ビルドしなくても標準のPython実装で完全に動作します。" },
+  "setupStep4": { "message": "この拡張機能を about:debugging#/runtime/this-firefox の「一時的なアドオンを読み込む」から読み込んでください(extension/manifest.json を選択)。" },
+  "setupStep5": { "message": "上のステータスが緑色になれば準備完了です。" },
+
+  "grantedOriginsHeading": { "message": "許可したオリジン" },
+  "grantedOriginsLead": { "message": "サイトが requestDevice() でユーザーに選ばせ、許可されたUSB機器の一覧です。" },
+  "noOriginsMessage": { "message": "許可されたオリジンはまだありません。" },
+  "buttonRevoke": { "message": "取り消す" },
+  "buttonRevokeAllForOrigin": { "message": "このオリジンの許可を全て取り消す" },
+
+  "knownDevicesHeading": { "message": "既知のデバイス" },
+  "knownDevicesLead": { "message": "これまでに一度でも選択されたことのあるUSB機器の履歴です(デバイス選択ダイアログでの並べ替えに使われます。許可そのものとは別の情報です)。" },
+  "noKnownDevicesMessage": { "message": "履歴はまだありません。" },
+  "buttonForgetDevice": { "message": "履歴から削除" },
+  "buttonForgetAllKnown": { "message": "履歴を全て消去" },
+  "buttonRefresh": { "message": "再読み込み" },
+  "unknownDeviceName": { "message": "(不明なデバイス)" },
+
+  "loadingMessage": { "message": "読み込み中…" },
+  "loadFailedMessage": { "message": "読み込みに失敗しました: $ERROR$", "placeholders": { "error": { "content": "$1" } } },
+
+  "tableHeaderDevice": { "message": "デバイス" },
+  "tableHeaderVidPid": { "message": "VID:PID" },
+  "tableHeaderConnectCount": { "message": "接続回数" },
+  "tableHeaderLastConnected": { "message": "最終接続" },
+
+  "chooserHeading": { "message": "$ORIGIN$ がUSBデバイスへの接続を求めています", "placeholders": { "origin": { "content": "$1" } } },
+  "chooserHeadingNoOrigin": { "message": "USBデバイスへの接続が求められています" },
+  "chooserTrustReminder": { "message": "信頼できるサイトからの要求の場合のみ、デバイスを選択してください。" },
+  "chooserNoDevices": { "message": "接続可能なデバイスが見つかりませんでした。" },
+  "chooserConnectButton": { "message": "接続" },
+  "chooserCancelButton": { "message": "キャンセル" },
+  "chooserSearchPlaceholder": { "message": "デバイスを検索…" }
+}

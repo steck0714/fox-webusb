@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.whl
+
+# Rust
+native/fox_webusb_accel/target/
+
+# Node (used only transiently for tsc/node-based test validation)
+node_modules/
+package-lock.json
+
+# Firefox extension packaging output
+extension/*.xpi
+web-ext-artifacts/
+
+# Settings file the native host writes at runtime (user-specific, not source)
+fox-webusb/settings.json
+
+# OS cruft
+.DS_Store
+Thumbs.db

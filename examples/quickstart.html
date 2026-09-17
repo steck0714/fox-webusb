@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<!--
+  fox-webusb クイックスタート例
+  ============================
+  compatibility_test.html が「一通りの機能を網羅的に叩いて動作確認する」
+  ためのページであるのに対し、こちらは「実際にアプリを書くならこう書く」
+  という最小限のコード例です。navigator.usb を使う側からすると、
+  fox-webusb (Firefox) でもChromeでも書き方は全く同じになります
+  ——それがこのポリフィルの狙いです。
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>fox-webusb クイックスタート</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; }
+  button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+  pre { background: #f5f2ec; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  #out { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.85rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+
+<h1>fox-webusb クイックスタート</h1>
+<p>接続したいUSB機器のフィルタを <code>&lt;script&gt;</code> 内で書き換えてから、下のボタンを押してください。</p>
+<button id="connect">USB機器に接続する</button>
+<div id="out"></div>
+
+<script>
+const out = document.getElementById('out');
+const print = (s) => { out.textContent += s + '\n'; };
+
+document.getElementById('connect').addEventListener('click', async () => {
+  out.textContent = '';
+  if (!navigator.usb) {
+    print('navigator.usb がありません。fox-webusb拡張機能が読み込まれているか確認してください。');
+    return;
+  }
+
+  try {
+    // フィルタを指定しない場合は filters: [{}] (全デバイス対象)。
+    // 特定のベンダーだけに絞りたい場合は例えば [{ vendorId: 0x2341 }] のように書く。
+    const device = await navigator.usb.requestDevice({ filters: [{}] });
+    print(`選択されたデバイス: ${device.productName || '(製品名なし)'} (${device.vendorId.toString(16)}:${device.productId.toString(16)})`);
+
+    await device.open();
+    print('open() 完了');
+
+    // configurationが未選択なら1個目を選ぶ(単一configurationの機器がほとんど)
+    if (!device.configuration) {
+      await device.selectConfiguration(device.configurations[0].configurationValue);
+      print(`selectConfiguration(${device.configurations[0].configurationValue}) 完了`);
+    }
+
+    await device.claimInterface(0);
+    print('claimInterface(0) 完了');
+
+    // 例: エンドポイント1(OUT)へ4バイト送ってみる
+    const result = await device.transferOut(1, new Uint8Array([0x01, 0x02, 0x03, 0x04]));
+    print(`transferOut() 完了: status=${result.status}, bytesWritten=${result.bytesWritten}`);
+
+    await device.close();
+    print('close() 完了');
+  } catch (e) {
+    print(`エラー: ${e.name}: ${e.message}`);
+  }
+});
+</script>
+</body>
+</html>
