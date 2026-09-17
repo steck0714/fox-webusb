@@ -59,12 +59,12 @@ def test_filters_narrow_the_candidate_list(tmp_settings):
     dev2 = make_simple_device(vendor_id=0x2222, product_id=0x0002)
     seen = {}
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         seen["devices"] = devices
         return None  # キャンセル
 
     b = make_bridge([dev1, dev2], tmp_settings, chooser_fn=chooser)
-    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{"vendorId": 0x1111}]})
+    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{"vendorId": 0x1111}]}, has_gesture=True)
     assert [d["vendorId"] for d in seen["devices"]] == [0x1111]
     print("test_filters_narrow_the_candidate_list: OK")
 
@@ -73,12 +73,12 @@ def test_empty_filters_array_matches_nothing(tmp_settings):
     dev1 = make_simple_device(vendor_id=0x1111, product_id=0x0001)
     seen = {}
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         seen["devices"] = devices
         return None
 
     b = make_bridge([dev1], tmp_settings, chooser_fn=chooser)
-    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": []})
+    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": []}, has_gesture=True)
     assert seen["devices"] == []
     print("test_empty_filters_array_matches_nothing: OK")
 
@@ -88,7 +88,7 @@ def test_exclusion_filters_remove_a_match(tmp_settings):
     dev2 = make_simple_device(vendor_id=0x1111, product_id=0x0002)
     seen = {}
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         seen["devices"] = devices
         return None
 
@@ -96,7 +96,7 @@ def test_exclusion_filters_remove_a_match(tmp_settings):
     b.dispatch("requestDeviceChooser", ORIGIN_A, False, {
         "filters": [{"vendorId": 0x1111}],
         "exclusionFilters": [{"vendorId": 0x1111, "productId": 0x0002}],
-    })
+    }, has_gesture=True)
     assert [d["productId"] for d in seen["devices"]] == [0x0001]
     print("test_exclusion_filters_remove_a_match: OK")
 
@@ -104,11 +104,11 @@ def test_exclusion_filters_remove_a_match(tmp_settings):
 def test_selected_device_gets_rich_descriptor(tmp_settings):
     dev = make_simple_device(vendor_id=0x1111, product_id=0x0001, product_name="Widget")
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         return devices[0]
 
     b = make_bridge([dev], tmp_settings, chooser_fn=chooser)
-    res = b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]})
+    res = b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]}, has_gesture=True)
     assert res["success"] is True
     assert res["device"]["productName"] == "Widget"
     assert len(res["device"]["configurations"]) == 1
@@ -119,19 +119,19 @@ def test_selected_device_gets_rich_descriptor(tmp_settings):
 def test_grant_recorded_only_on_selection(tmp_settings):
     dev = make_simple_device(vendor_id=0x1111, product_id=0x0001)
 
-    def cancel_chooser(devices, origin, refresh):
+    def cancel_chooser(devices, origin, refresh, locale=None):
         return None
 
     b = make_bridge([dev], tmp_settings, chooser_fn=cancel_chooser)
-    res = b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]})
+    res = b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]}, has_gesture=True)
     assert res["success"] is False
     assert tmp_settings.load_granted_origins() == {}
 
-    def accept_chooser(devices, origin, refresh):
+    def accept_chooser(devices, origin, refresh, locale=None):
         return devices[0]
 
     b2 = make_bridge([dev], tmp_settings, chooser_fn=accept_chooser)
-    res2 = b2.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]})
+    res2 = b2.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]}, has_gesture=True)
     assert res2["success"] is True
     assert tmp_settings.is_granted(ORIGIN_A, 0x1111, 0x0001)
     print("test_grant_recorded_only_on_selection: OK")
@@ -141,12 +141,12 @@ def test_origin_is_passed_to_the_dialog(tmp_settings):
     dev = make_simple_device()
     seen = {}
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         seen["origin"] = origin
         return None
 
     b = make_bridge([dev], tmp_settings, chooser_fn=chooser)
-    b.dispatch("requestDeviceChooser", "https://origin-under-test.example", False, {"filters": [{}]})
+    b.dispatch("requestDeviceChooser", "https://origin-under-test.example", False, {"filters": [{}]}, has_gesture=True)
     assert seen["origin"] == "https://origin-under-test.example"
     print("test_origin_is_passed_to_the_dialog: OK")
 
@@ -155,7 +155,7 @@ def test_refresh_callback_reflects_newly_plugged_device(tmp_settings):
     dev1 = make_simple_device(vendor_id=0x1111, product_id=0x0001)
     pool = [dev1]
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         assert len(devices) == 1
         dev2 = make_simple_device(vendor_id=0x1111, product_id=0x0002)
         pool.append(dev2)
@@ -164,7 +164,7 @@ def test_refresh_callback_reflects_newly_plugged_device(tmp_settings):
         return None
 
     b = make_bridge(pool, tmp_settings, chooser_fn=chooser)
-    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{"vendorId": 0x1111}]})
+    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{"vendorId": 0x1111}]}, has_gesture=True)
     print("test_refresh_callback_reflects_newly_plugged_device: OK")
 
 
@@ -172,14 +172,14 @@ def test_requestDeviceChooser_reentrancy_guard(tmp_settings):
     dev = make_simple_device()
     shared = {}
 
-    def chooser(devices, origin, refresh):
-        res = shared["bridge"].dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]})
+    def chooser(devices, origin, refresh, locale=None):
+        res = shared["bridge"].dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]}, has_gesture=True)
         shared["inner"] = res
         return None
 
     b = make_bridge([dev], tmp_settings, chooser_fn=chooser)
     shared["bridge"] = b
-    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]})
+    b.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]}, has_gesture=True)
     assert shared["inner"]["success"] is False
     assert "already open" in shared["inner"]["error"]
     print("test_requestDeviceChooser_reentrancy_guard: OK")
@@ -192,11 +192,11 @@ def test_full_flow_persists_grant_and_usage_without_mocking_internals(tmp_path):
     store1 = SettingsStore(path=store_path)
     dev = make_simple_device(vendor_id=0x9999, product_id=0x0001, product_name="Persisted Gadget")
 
-    def chooser(devices, origin, refresh):
+    def chooser(devices, origin, refresh, locale=None):
         return devices[0]
 
     b1 = make_bridge([dev], store1, chooser_fn=chooser)
-    res = b1.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]})
+    res = b1.dispatch("requestDeviceChooser", ORIGIN_A, False, {"filters": [{}]}, has_gesture=True)
     assert res["success"] is True
 
     # 新しいSettingsStoreインスタンス(=プロセス再起動を模す)で同じファイルを開く
@@ -363,6 +363,42 @@ def test_bulk_transfer_reports_stall_as_successful_status(tmp_settings):
     assert res["success"] is True
     assert res["status"] == "stall"
     print("test_bulk_transfer_reports_stall_as_successful_status: OK")
+
+
+def test_physical_disconnect_during_transfer_fails_cleanly_without_crashing(tmp_settings):
+    """🛡️ 実USBでありがちな挙動: 転送の真っ最中にケーブルが抜ける/デバイスが
+    再起動する(ファームウェア更新後の再起動、DFUモードへの遷移等)と、
+    libusb(pyusbのバックエンド)は errno=19 (ENODEV, "No such device (it may
+    have been disconnected)") のUSBErrorを送出する。STALL/Babbleのような
+    「デバイス側の正常な意思表示」ではなく、本当にI/O自体が続けられなくなった
+    ケースなので、成功扱い(status: 'stall'等)ではなく素直な失敗であるべきで、
+    かつホストプロセス自体がクラッシュしたり、以降のディスパッチが壊れたり
+    してはならない(=次のoperationは"Invalid handle"等、通常の失敗として
+    安全に処理され続ける)。実ChromeもこのケースはNetworkErrorとして
+    reject するため、is_stall_error/is_babble_errorのどちらにも一致しない
+    通常のUSBErrorとして safe_error_str() 経由でNetworkError相当に落ちる、
+    という現状の(特別扱いをしない)実装は実ブラウザの挙動と一致している。"""
+    import usb.core
+
+    dev = make_simple_device(vendor_id=0x1111, product_id=0x0001)
+    tmp_settings.grant(ORIGIN_A, 0x1111, 0x0001)
+
+    def on_read(endpoint, length, timeout):
+        raise usb.core.USBError("No such device (it may have been disconnected)", errno=19)
+
+    dev.on_read = on_read
+    b = make_bridge([dev], tmp_settings)
+    handle = _open_and_claim(b, ORIGIN_A, 0x1111, 0x0001)
+
+    res = b.dispatch("bulkTransferIn", ORIGIN_A, False, {"handle": handle, "endpoint": 1, "length": 8})
+    assert res["success"] is False, "本物の切断はSTALL/Babbleと違い、成功扱いにしてはならない"
+    assert "disconnected" in res["error"].lower() or "no such device" in res["error"].lower()
+
+    # ホストプロセス自体は無事で、以降のdispatchも正常に動き続ける
+    # (同じハンドルで別の操作を試みても、通常の失敗として安全に処理される)。
+    res2 = b.dispatch("closeDevice", ORIGIN_A, False, {"handle": handle})
+    assert res2["success"] is True
+    print("test_physical_disconnect_during_transfer_fails_cleanly_without_crashing: OK")
 
 
 def test_bulk_transfer_round_trips_realistic_payload(tmp_settings):
@@ -646,3 +682,111 @@ def test_poll_hotplug_events_ignores_ungranted_devices(tmp_settings):
     b.poll_hotplug_events()
     assert events == []
     print("test_poll_hotplug_events_ignores_ungranted_devices: OK")
+
+
+# ============================================================
+# openDevice: オリジンあたりのハンドル数上限 (v0.0.0a1, 独立したセキュリティ
+# 監査を受けての追加。pyside6-webusb側の同種修正[No.6]を移植したもの)
+# ============================================================
+
+def test_open_device_caps_handles_per_origin_via_lru_eviction(tmp_settings):
+    tmp_settings.grant(ORIGIN_A, 0x2341, 0x8036)
+    dev = make_simple_device(vendor_id=0x2341, product_id=0x8036)
+    b = make_bridge([dev], tmp_settings)
+
+    handles = []
+    for _ in range(b._MAX_OPEN_HANDLES_PER_ORIGIN + 6):
+        result = b.dispatch("openDevice", ORIGIN_A, False, {"vendorId": 0x2341, "productId": 0x8036})
+        assert result["success"] is True, result
+        handles.append(result["handle"])
+
+    same_origin_handles = [hid for hid, info in b._open_devices.items() if info["origin"] == ORIGIN_A]
+    assert len(same_origin_handles) == b._MAX_OPEN_HANDLES_PER_ORIGIN, (
+        f"expected _open_devices to stay capped at {b._MAX_OPEN_HANDLES_PER_ORIGIN} entries for one "
+        f"origin no matter how many times openDevice() is called without closing anything in between, "
+        f"got {len(same_origin_handles)}"
+    )
+    # 最初の方に発行されたハンドルは退去されているはずで、それを使った操作は
+    # 「そもそも存在しないハンドル」と同じ扱いで安全に失敗する(クラッシュしない)。
+    stale_result = b.dispatch("selectConfiguration", ORIGIN_A, False, {"handle": handles[0], "configurationValue": 1})
+    assert stale_result["success"] is False
+    # 最後に発行されたハンドルはまだ生きているはず。
+    fresh_result = b.dispatch("selectConfiguration", ORIGIN_A, False, {"handle": handles[-1], "configurationValue": 1})
+    assert fresh_result["success"] is True, fresh_result
+    print("test_open_device_caps_handles_per_origin_via_lru_eviction: OK")
+
+
+def test_open_device_per_origin_cap_does_not_affect_other_origins(tmp_settings):
+    tmp_settings.grant(ORIGIN_A, 0x2341, 0x8036)
+    tmp_settings.grant(ORIGIN_B, 0x2341, 0x8036)
+    dev = make_simple_device(vendor_id=0x2341, product_id=0x8036)
+    b = make_bridge([dev], tmp_settings)
+
+    for _ in range(b._MAX_OPEN_HANDLES_PER_ORIGIN + 6):
+        result = b.dispatch("openDevice", ORIGIN_A, False, {"vendorId": 0x2341, "productId": 0x8036})
+        assert result["success"] is True
+
+    # ORIGIN_A が上限いっぱいまで(自ら退去を招きながら)開いていても、
+    # 全く無関係な ORIGIN_B の新規openは影響を受けない。
+    result_b = b.dispatch("openDevice", ORIGIN_B, False, {"vendorId": 0x2341, "productId": 0x8036})
+    assert result_b["success"] is True, result_b
+    origin_b_handles = [hid for hid, info in b._open_devices.items() if info["origin"] == ORIGIN_B]
+    assert len(origin_b_handles) == 1
+    print("test_open_device_per_origin_cap_does_not_affect_other_origins: OK")
+
+
+# ============================================================
+# ローカルアテステーション (v0.0.0a1、独自拡張。attestation.py参照)
+# ============================================================
+
+def test_attestation_public_key_is_stable_per_origin(tmp_settings):
+    b = make_bridge([], tmp_settings)
+    first = b.dispatch("getAttestationPublicKey", ORIGIN_A, False, {})
+    assert first["success"] is True
+    second = b.dispatch("getAttestationPublicKey", ORIGIN_A, False, {})
+    assert second["success"] is True
+    assert first["publicKey"] == second["publicKey"], (
+        "同一オリジンへの2回目の呼び出しは(新しい鍵を生成し直すのではなく)"
+        "同じ公開鍵を返し続けるべき"
+    )
+    print("test_attestation_public_key_is_stable_per_origin: OK")
+
+
+def test_attestation_keys_are_unlinkable_across_origins(tmp_settings):
+    b = make_bridge([], tmp_settings)
+    key_a = b.dispatch("getAttestationPublicKey", ORIGIN_A, False, {})["publicKey"]
+    key_b = b.dispatch("getAttestationPublicKey", ORIGIN_B, False, {})["publicKey"]
+    assert key_a != key_b, (
+        "異なるオリジンには異なる鍵を割り当てる必要がある——単一の鍵をオリジン"
+        "横断で使い回すと、それ自体がクロスサイトトラッキングの識別子になる"
+    )
+    print("test_attestation_keys_are_unlinkable_across_origins: OK")
+
+
+def test_attestation_signature_verifies_only_with_the_matching_origins_key(tmp_settings):
+    from fox_webusb_host import attestation
+    import base64
+
+    b = make_bridge([], tmp_settings)
+    pub_a = b.dispatch("getAttestationPublicKey", ORIGIN_A, False, {})["publicKey"]
+    pub_b = b.dispatch("getAttestationPublicKey", ORIGIN_B, False, {})["publicKey"]
+
+    challenge = base64.b64encode(b"a fresh random nonce chosen by the site").decode()
+    signed = b.dispatch("signAttestationChallenge", ORIGIN_A, False, {"challenge": challenge})
+    assert signed["success"] is True
+
+    assert attestation.verify_signature_b64(pub_a, challenge, signed["signature"]) is True
+    assert attestation.verify_signature_b64(pub_b, challenge, signed["signature"]) is False, (
+        "ORIGIN_Aの署名がORIGIN_Bの公開鍵で検証できてしまってはならない(なりすまし防止)"
+    )
+    print("test_attestation_signature_verifies_only_with_the_matching_origins_key: OK")
+
+
+def test_attestation_rejects_oversized_challenge(tmp_settings):
+    import base64
+    b = make_bridge([], tmp_settings)
+    huge_challenge = base64.b64encode(b"x" * 100_000).decode()
+    result = b.dispatch("signAttestationChallenge", ORIGIN_A, False, {"challenge": huge_challenge})
+    assert result["success"] is False
+    assert result["error"].startswith("TypeError:")
+    print("test_attestation_rejects_oversized_challenge: OK")

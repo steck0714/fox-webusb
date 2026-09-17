@@ -21,6 +21,9 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
+const CORE_SRC = fs.readFileSync(
+  path.join(__dirname, '..', 'extension', 'webusb_core.js'), 'utf8',
+);
 const POLYFILL_SRC = fs.readFileSync(
   path.join(__dirname, '..', 'extension', 'page_polyfill.js'), 'utf8',
 );
@@ -61,15 +64,29 @@ function makeSandbox(mockDispatch, opts) {
   };
 
   const sandbox = {
-    window, navigator, document: { location: window.location },
+    window, navigator,
+    document: {
+      location: window.location,
+      // opts.permissionsPolicyDeniesUsb === true の場合、実ブラウザの
+      // document.permissionsPolicy.allowsFeature('usb') が false を返す
+      // ケースを模す(Permissions-Policyヘッダーやiframe allow属性で
+      // 'usb'機能が許可されていないフレーム)。未指定ならAPI自体が
+      // 存在しない(実験的機能が無い、より古い/一般的なブラウザ)ものとして扱う。
+      permissionsPolicy: opts.permissionsPolicyDeniesUsb === undefined ? undefined : {
+        allowsFeature(name) { return name === 'usb' ? !opts.permissionsPolicyDeniesUsb : true; },
+      },
+    },
     DOMException: global.DOMException,
     EventTarget: global.EventTarget, Event: global.Event,
     btoa: global.btoa, atob: global.atob,
     Uint8Array, Int8Array, DataView, ArrayBuffer, TextEncoder, TextDecoder,
     Promise, Object, Array, JSON, Math, Error, TypeError, RangeError, String, Number, Boolean, Symbol,
+    Proxy, Reflect, // webusb_core.js の _nativeLooking()(devtools耐性のtoString偽装)が使う
     setTimeout, clearTimeout, console,
   };
+  sandbox.globalThis = sandbox; // webusb_core.js が root(=globalThis)に FoxWebusbCore をぶら下げるため
   vm.createContext(sandbox);
+  vm.runInContext(CORE_SRC, sandbox, { filename: 'webusb_core.js' });
   vm.runInContext(POLYFILL_SRC, sandbox, { filename: 'page_polyfill.js' });
   return sandbox;
 }
@@ -121,9 +138,83 @@ const SIMPLE_DEVICE = {
     assert.strictEqual(navigator.usb, marker);
   });
 
+  await run('delete navigator.usb cannot remove it once this polyfill has installed it', async () => {
+    // 🛡️ non-configurableなプロパティへのdeleteは、非strictモードでは黙って
+    // falseを返すが、strictモード(このテストファイル自身がそう)では
+    // TypeErrorを投げる——これはJS言語仕様そのものの、モード依存の違いで
+    // あって、ブラウザや実装による違いではない。どちらの経路でも
+    // 実際に大事な不変条件は同じ: navigator.usb が消えずに残ること。
+    const { navigator } = makeSandbox(() => ({}));
+    assert.ok(navigator.usb, 'precondition: navigator.usb should be installed');
+    let threw = false;
+    let deleteResult;
+    try {
+      deleteResult = delete navigator.usb;
+    } catch (e) {
+      threw = true;
+      assert.ok(e instanceof TypeError, 'a thrown error here should be a TypeError (non-configurable delete in strict mode)');
+    }
+    if (!threw) assert.strictEqual(deleteResult, false, 'delete navigator.usb should return false (non-configurable) in non-strict mode');
+    assert.ok(navigator.usb, 'navigator.usb must still be present after a failed delete attempt, either way');
+  });
+
   await run('does nothing outside a secure context', async () => {
     const { navigator } = makeSandbox(() => ({}), { isSecureContext: false });
     assert.strictEqual(navigator.usb, undefined);
+  });
+
+  await run('does not install navigator.usb when Permissions Policy denies the "usb" feature', async () => {
+    // 🛡️ 例: このページが親からクロスオリジンでiframe埋め込みされており、
+    // 親が<iframe allow="usb">で明示的に委譲していない場合、既定の
+    // allowlist('self')によりこのフレームではWebUSB機能自体が
+    // そもそも無効になる。
+    const { navigator } = makeSandbox(() => ({}), { permissionsPolicyDeniesUsb: true });
+    assert.strictEqual(navigator.usb, undefined);
+  });
+
+  await run('installs navigator.usb when Permissions Policy allows the "usb" feature', async () => {
+    const { navigator } = makeSandbox(() => ({}), { permissionsPolicyDeniesUsb: false });
+    assert.ok(navigator.usb);
+  });
+
+  await run('installs navigator.usb when document.permissionsPolicy is not implemented at all', async () => {
+    // 実験的なAPIなので、無いブラウザでは何も制限せずこれまでどおり動く。
+    const { navigator } = makeSandbox(() => ({})); // permissionsPolicyDeniesUsb未指定 => APIごと無し
+    assert.ok(navigator.usb);
+  });
+
+  await run('__foxWebUSB.extensions.attestation.getPublicKey() round-trips through the bridge', async () => {
+    const fakePublicKey = Buffer.alloc(32, 7).toString('base64');
+    const { window } = makeSandbox((method) => {
+      assert.strictEqual(method, 'getAttestationPublicKey');
+      return { success: true, publicKey: fakePublicKey };
+    });
+    const pub = await window.__foxWebUSB.extensions.attestation.getPublicKey();
+    assert.ok(pub instanceof Uint8Array);
+    assert.strictEqual(pub.length, 32);
+  });
+
+  await run('__foxWebUSB.extensions.attestation.sign() base64-encodes the challenge and decodes the returned signature', async () => {
+    const fakeSignature = Buffer.alloc(64, 9).toString('base64');
+    let seenParams = null;
+    const { window } = makeSandbox((method, params) => {
+      assert.strictEqual(method, 'signAttestationChallenge');
+      seenParams = params;
+      return { success: true, signature: fakeSignature };
+    });
+    const challenge = new Uint8Array([10, 20, 30]);
+    const sig = await window.__foxWebUSB.extensions.attestation.sign(challenge);
+    assert.strictEqual(seenParams.challenge, Buffer.from(challenge).toString('base64'));
+    assert.ok(sig instanceof Uint8Array);
+    assert.strictEqual(sig.length, 64);
+  });
+
+  await run('__foxWebUSB.extensions.attestation.sign() propagates a bridge-side rejection as a real error', async () => {
+    const { window } = makeSandbox(() => ({ success: false, error: 'TypeError: challenge is too long (max 4096 bytes)' }));
+    await assert.rejects(
+      () => window.__foxWebUSB.extensions.attestation.sign(new Uint8Array([1])),
+      TypeError,
+    );
   });
 
   await run('getDevices() resolves with USBDevice-like wrappers', async () => {
