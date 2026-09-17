@@ -5,6 +5,165 @@ pyside6-webusb の変更履歴(v0.0.1〜v0.0.4b0)は同プロジェクト自身�
 CHANGELOG.md を参照してください。fox-webusbはアーキテクチャが別物になった
 ため、バージョン番号は移植元の系列を引き継がず 0.0.0 から数え直しています。
 
+## [0.0.0a1]
+
+### セキュリティ (pyside6-webusb側の独立した監査で見つかった問題の移植)
+
+fox-webusbは移植元(pyside6-webusb v0.0.4b1)からフォークした時点のコードを
+引き継いでいたため、その後pyside6-webusb側で見つかった問題のいくつかを
+同様に抱えていないか確認し、実際に抱えていたものを修正した。
+
+- **alternate setting混同による保護対象インターフェースクラスへの回避策
+  (pyside6-webusb側No.1相当)。** `_find_claimed_endpoint()`(bulk/interrupt
+  転送・endpoint宛てcontrol転送)は元から「claim済みかつ現在選択中の
+  alternate setting」だけを見る設計になっていたが、`interface_class_for()`
+  自体はalternate settingという概念を知らず、`claim_interface()`の保護対象
+  クラス判定と`_control_transfer_validation_error()`のinterface宛て
+  (class種別)分岐の2箇所がこれに依存していたため、この2箇所だけ回避策が
+  成立し得た。`interface_class_for()`にalternate_setting引数を追加し、
+  両呼び出し元がそれぞれ適切な値(claim直後は0、以降は
+  `active_alternates`で追跡している実際の値)を明示的に渡すよう修正。
+- **`requestDeviceChooser()`にサーバー側のユーザー操作検証が無かった
+  (pyside6-webusb側No.2相当、フィルタ構造検証は元から実装済みだった)。**
+  `page_polyfill.js`自身の`navigator.userActivation.isActive`チェックは
+  ページのMAIN worldで動くため、`content_script.js`が待ち受ける
+  `postMessage`の形さえ真似すれば丸ごと迂回できた。pyside6-webusb版とは
+  異なる、fox-webusb固有の、より強力な対策を実装した:
+  `content_script.js`(isolated world)がdocumentへ直接
+  capturing listenerを張り、`event.isTrusted === true`の実操作だけを
+  観測して直近の「本物の」ユーザー操作の有無を独立に判定する——ページ側の
+  JSはisTrustedがtrueの合成イベントを一切作れないため、これはページ自身に
+  偽装しようがない。PySide6/QtWebEngine版ではDOM側のUser Activation状態を
+  ホスト側から独立に観測する手段が無く「ハードルを上げる」止まりだったのに
+  対し、拡張機能のisolated worldというFirefox固有の仕組みのおかげで、
+  こちらの方が実際にページ側から偽装不可能な、より強い保証になっている。
+- **デバイス提供文字列(製造者名・製品名・シリアル番号・configurationName・
+  interfaceName)が無検査だった(pyside6-webusb側No.3相当)。**
+  `sanitize_device_string()`を移植し、制御文字・Unicode双方向オーバーライド
+  文字の除去と長さ上限を適用。Tkinterの`Label`はQtの`QLabel`と違いHTML/
+  リッチテキストを解釈しないため、pyside6-webusb版で別途必要だった
+  「PlainTextを強制する」対応は不要だった。
+- **`openDevice()`にオリジンあたりの上限が無かった(pyside6-webusb側No.6
+  相当)。** 1オリジンが同時に保持できるハンドル数に上限を設け、超過時は
+  そのオリジンの最も古いハンドルをLRU的に自動解放する(openDevice自体は
+  常に成功を返し続ける)。fox-webusbは本物のスレッドプールで動くため、
+  数える→退去→追加を専用ロックで直列化する必要があった
+  (pyside6-webusb版はQtの単一スレッドモデルなので不要だった)。
+- `closeDevice()`相当(`close_device()`)・ホットプラグイベントの配送
+  (`dispatchDeviceEvent`が`origins`で宛先を絞る設計)は、確認の結果
+  pyside6-webusb側で見つかった問題(No.4・No.5)を元々抱えていなかった。
+
+### アーキテクチャ: 二重サーフェス (Chromium surface / Firefox-style surface)
+
+`navigator.usb`のクラス定義・エラー変換・base64変換等を`webusb_core.js`
+という単一の共有ファイルへ切り出した。トランスポート(呼び出し方)だけが
+異なる2つの「顔」がこれを共有する:
+
+- **Chromium surface** — 従来どおりの`page_polyfill.js`。任意のWebページの
+  MAIN worldへ注入され、`window.postMessage()`経由で動く。
+- **Firefox-style surface** — 新設。`background.js`自身が`webusb_core.js`を
+  `postMessage`/`content_script.js`を一切経由せず直接駆動し、拡張機能自身の
+  `navigator`へ`navigator.usb`相当を取り付ける。`browser.runtime.
+  getBackgroundPage()`経由で`popup.js`等、拡張機能の他のページからも
+  同じインスタンスを参照できる。WICGが実際に提案している
+  ["extension service worker" 拡張案](https://github.com/WICG/webusb/blob/main/extension-service-worker-explainer.md)
+  (Chrome 118以降、拡張機能のservice workerに`navigator.usb`を公開している
+  実際の仕様の方向性)と同じ発想を、Manifest V2の永続的background pageに
+  合わせて実装したもの。
+
+両サーフェスは同一の`webusb_core.js`を共有するため、挙動が食い違うことは
+構造的に起こり得ない。詳細はREADME「二重サーフェス」参照。
+
+### 仕様追従: WebUSB仕様(2026年9月時点)との突き合わせ
+
+- `USBConnectionEvent`をWICG仕様の現行版(`wicg.github.io/webusb`、2026年6月版)
+  のIDLどおりに修正: `USBConnectionEventInit.device`が`required`であることを
+  実際に強制するようにした(以前は省略してもdeviceがnullのまま黙って構築
+  できてしまっていた)。
+- **Permissions Policy(`usb`機能)に対応。** `Permissions-Policy: usb`
+  ヘッダーや`<iframe allow="usb">`属性を`document.permissionsPolicy.
+  allowsFeature('usb')`で確認し、既定のallowlist(`self`)により許可されて
+  いないクロスオリジンiframeには`navigator.usb`自体を一切公開しないように
+  した。これは後述の`usb-unrestricted`とは正反対の、ページ側が「このフレーム
+  ではWebUSBを使わせない」と宣言できる防御強化の仕組みである。実験的APIな
+  ので未実装ブラウザでは何も制限しない。
+
+現行仕様で見つかった`usb-unrestricted`(Isolated Web Appsが保護対象
+インターフェースクラス・ブロックリストを迂回できるようにする、Chrome/
+ChromeOS固有の新機能)は、**意図的に実装していない。** Isolated Web Appsに
+相当する、暗号学的に検証された配布・実行環境がFirefox拡張機能には存在せず、
+これを安全に成立させる前提条件そのものが無い。実装すれば「任意のページが
+セキュリティキーやキーボードに生アクセスできる」経路を作るだけになり、
+このプロジェクト全体が積み上げてきた保護を素通りさせることになるため、
+見送るのが正しいと判断した。
+
+### 独自機能: ローカルアテステーション (Ed25519)
+
+`window.__foxWebUSB.extensions.attestation` を新設。オリジンごとの
+Ed25519鍵ペア(確立された、広く検証済みの署名方式そのもの——独自の暗号
+アルゴリズムは一切自作していない)を使い、サイトが「このレスポンスが本当に
+前回と同じローカルブリッジから来たものか」をTOFU方式で検証できる、実Chrome
+のWebUSBには存在しない機能。鍵はオリジンごとに完全独立しており、クロス
+サイトトラッキングの識別子として悪用できないよう設計している。オプトイン
+の依存関係(`cryptography`)が無い環境では機能自体が無効化されるだけで、
+基本機能には影響しない。`getAttestationPublicKey`/`signAttestationChallenge`
+(いずれも新規PAGE_METHODS)、`native-host/src/fox_webusb_host/attestation.py`
+参照。
+
+### 独自コマンド
+
+拡張機能自身の特権ページ(background.js/popup.js/options.js)向けに
+`window.__foxWebUsbManagement` を新設。既存のtrusted-onlyな管理系操作
+(`listKnownDevices`等)を`getBackgroundPage()`経由で直接呼べるように整理した
+——`navigator.usb`自体の形状・挙動には一切手を加えず、新しい権限も追加して
+いない、単なる呼び方の糖衣構文。
+
+### F12デバッグヘルパー
+
+`window.__foxWebUSB`(`listGrantedDevices`/`bridgeInfo`/`explainTransferLimits`)
+を新設。特に`bridgeInfo()`はご要望の「バージョンチェック用のF12」に対応する
+もので、F12でDevToolsコンソールを開き`__foxWebUSB.bridgeInfo()`と打つだけで
+現在のブリッジのバージョンを確認できる。
+
+### 実際のUSB接続でありがちな挙動の確認
+
+転送の真っ最中に物理的に切断される(ケーブルが抜ける、ファームウェア更新で
+再起動する等、`errno=19`/ENODEV)ケースを実際にシミュレートするテストを
+追加した。STALL/Babbleは元々正しく実装されていたことを確認済み。このケース
+は特別扱いせず通常のNetworkError相当に落ちる現状の実装が、実際のChromeの
+挙動と一致していることも確認した(=修正ではなく、検証によって現状の設計が
+正しいと確定させたもの)。
+
+### TypeScript
+
+`window.__foxWebUSB`(`.extensions.attestation`含む)がこれまで型定義に一切
+反映されていなかったため、新たに`types/fox-webusb-extensions.d.ts`を作成
+(共有の`webusb-polyfill.d.ts`とは意図的に別ファイル——pyside6-webusb版とは
+形が異なるため)。`fox-webusb-extensions-sample-usage.ts`/
+`fox-webusb-extensions-negative-check.ts`を揃え、`tsc --strict`で実際に
+検証済み。
+
+### i18n: UIのja/en/zh_CN対応
+
+- 拡張機能側(popup/options)は標準のWebExtensions i18n API
+  (`browser.i18n`、`_locales/{ja,en,zh_CN}/messages.json`)に対応。
+  `default_locale`は`ja`。
+- ネイティブホスト側のチューザーダイアログ(Tkinter、`browser.i18n`相当の
+  仕組みを持たない別プロセス)向けに、簡易な翻訳テーブル`i18n.py`を新設。
+  表示言語は`content_script.js`が`browser.i18n.getUILanguage()`で求めた
+  Firefox本体のUI言語を、ネイティブメッセージング経由で(認可判定には
+  一切使わない、表示上の好みとしてのみ)渡す仕組みにした
+  (`request_device_chooser()`のdocstring参照)。
+
+### 修正: `install.py`のPYTHONPATH問題(実機検証で発見)
+
+`checklog2.md`(Windows + LibreWolf環境での実機検証)で報告された
+`ModuleNotFoundError: No module named 'fox_webusb_host'`を実際に再現し、
+修正を確認した。ランチャースクリプト自体に`native-host/src`へのPYTHONPATHを
+明示的に埋め込むようにした——`pip install -e .`を忘れた、または`--python`で
+指定したものとは別のインタプリタでインストールしてしまった場合の
+セーフティネットになる(正しくインストールされている場合は無害)。
+
 ## [0.0.0a0] - 実機検証フィードバックに基づく修正リリース
 
 移植元を pyside6-webusb v0.0.4b1 へ追従させつつ、実際にWindows +
