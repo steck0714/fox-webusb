@@ -28,6 +28,7 @@ QSettings(organization, application) にフォールバックする設計)。fox
     (最後に書き込んだプロセスが勝つ、という単純な楽観的並行性。移植元のQSettingsも
     同程度の保証しかしていない)。
 """
+import base64
 import json
 import os
 import sys
@@ -60,7 +61,7 @@ class SettingsStore:
     def __init__(self, path=None):
         self._path = Path(path) if path is not None else default_settings_path()
         self._lock = threading.RLock()
-        self._data = {"granted_origins": {}, "known_devices": []}
+        self._data = {"granted_origins": {}, "known_devices": [], "attestation_keys": {}}
         self._load()
 
     # ---- 内部: 読み書き ----
@@ -74,6 +75,7 @@ class SettingsStore:
                     self._data = {
                         "granted_origins": data.get("granted_origins") if isinstance(data.get("granted_origins"), dict) else {},
                         "known_devices": data.get("known_devices") if isinstance(data.get("known_devices"), list) else [],
+                        "attestation_keys": data.get("attestation_keys") if isinstance(data.get("attestation_keys"), dict) else {},
                     }
             except FileNotFoundError:
                 pass
@@ -198,3 +200,28 @@ class SettingsStore:
                     "priority": len(devices),
                 })
             self._save()
+
+    # ---- attestation_keys (v0.0.0a1: ローカルアテステーション用) ----
+
+    def get_or_create_attestation_key_seed(self, origin) -> str:
+        """オリジン単位のEd25519秘密鍵シード(base64エンコード済み、32バイト)を
+        返す。まだ無ければ生成して永続化する。実際の署名処理・鍵の
+        フォーマット等はattestation.py参照。
+        🛡️ 鍵はオリジンごとに完全に独立している。異なるオリジンの公開鍵を
+        突き合わせても同一マシン/同一ユーザーであるとは判定できない——
+        WebUSBの許可モデル自体がオリジン単位であることと一貫性を保つための、
+        意図的なプライバシー設計である(単一のグローバルな鍵をオリジン横断で
+        使い回すと、それ自体がクロスサイトトラッキングの識別子になってしまう)。"""
+        if not origin:
+            raise ValueError("origin is required to derive an attestation key")
+        from . import attestation
+        if not attestation.HAVE_ATTESTATION:
+            raise RuntimeError("the 'cryptography' package is not installed; local attestation is unavailable")
+        with self._lock:
+            keys = self._data.setdefault("attestation_keys", {})
+            seed_b64 = keys.get(origin)
+            if seed_b64 is None:
+                seed_b64 = base64.b64encode(attestation.Ed25519PrivateKey.generate().private_bytes_raw()).decode("ascii")
+                keys[origin] = seed_b64
+                self._save()
+            return seed_b64

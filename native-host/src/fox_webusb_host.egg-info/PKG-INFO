@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: fox-webusb-host
+Version: 0.0.0a1
+Summary: Firefox native-messaging host for fox-webusb: a WebUSB (navigator.usb) polyfill for Firefox, ported from pyside6-webusb. Talks to real USB hardware via pyusb/libusb on behalf of the fox-webusb WebExtension.
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: pyusb>=1.2
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Provides-Extra: attestation
+Requires-Dist: cryptography>=41; extra == "attestation"
+
+# fox-webusb-host
+
+This is the native-messaging host half of [fox-webusb](../README.md) — see the
+top-level README for what this project is, how it's architected, its security
+model, and installation instructions. This stub file exists only because
+modern `setuptools` refuses to build a package whose `readme` points outside
+its own package root, and `pyproject.toml` lives in this directory while the
+real README lives one level up.

@@ -103,7 +103,10 @@ from .errors import (
     not_found_error,
     invalid_access_error,
     index_size_error,
+    type_error,
 )
+from . import attestation
+from .attestation import HAVE_ATTESTATION
 from .hardening import (
     is_protected_interface_class,
     protected_class_name,
@@ -123,6 +126,7 @@ from .hardening import (
     scaled_transfer_timeout_ms,
 )
 from .settings_store import SettingsStore
+from . import __version__
 
 # 標準的なUSB control transferのbmRequestTypeビットレイアウト(USB 2.0仕様
 # 9.3節)。requestType(standard/class/vendor)とrecipient(device/interface/
@@ -171,6 +175,8 @@ class WebUsbNativeBridge:
     (=pytestで素朴にインスタンス化して直接メソッドを呼ぶだけでテストできる、
     原作と同じ設計方針)。"""
 
+    _MAX_OPEN_HANDLES_PER_ORIGIN = 64  # 独立したセキュリティ監査(pyside6-webusb側No.6)を受けての上限。正当なユースケースでも十分すぎるほど余裕を持たせてある
+
     def __init__(self, settings_store=None, chooser_fn=None, event_sink=None, usb_finder=None):
         self._settings = settings_store or SettingsStore()
         # chooser_fn(devices: list[dict], origin: str, refresh_callback: Callable[[], list[dict]]) -> dict|None
@@ -183,6 +189,11 @@ class WebUsbNativeBridge:
         self._open_devices = {}   # handle_id(int) -> {"device", "origin", "vendor_id", "product_id", "configuration_selected", "claimed_interfaces", "active_alternates"}
         self._next_handle = 1
         self._next_handle_lock = threading.Lock()
+        # 🛡️ v0.0.0a1: open_device()のオリジンあたり上限チェック+LRU退去用。
+        # 本物のスレッドプールで動く(pyside6-webusb版のような単一Qt
+        # スレッドではない)ため、「数える→(必要なら)退去させる→追加する」を
+        # 1つの操作として直列化する専用ロックを設ける。
+        self._open_devices_admission_lock = threading.Lock()
 
         self._handle_locks = {}          # handle_id または "__chooser__" -> threading.Lock()
         self._handle_locks_guard = threading.Lock()
@@ -215,7 +226,7 @@ class WebUsbNativeBridge:
     # ============================================================
     # dispatch: __main__.py のワーカースレッドから呼ばれる唯一の入口
     # ============================================================
-    def dispatch(self, method, origin, trusted, params):
+    def dispatch(self, method, origin, trusted, params, has_gesture=False, locale=None):
         """method名を実際のメソッドへ振り分ける。ページ向けメソッド
         (PAGE_METHODS)はorigin必須、信頼済み専用メソッド(TRUSTED_METHODS)は
         trusted=Trueでなければ拒否する——ただし実際にどちらに属するかの
@@ -223,7 +234,11 @@ class WebUsbNativeBridge:
         既に行っており、ここでのtrustedチェックは多層防御の2枚目に過ぎない
         (background.jsを迂回して直接このプロセスに話しかけられるのは
         Firefox自身のネイティブメッセージング経路だけなので、通常は
-        ここに到達する前に弾かれているはずである)。"""
+        ここに到達する前に弾かれているはずである)。
+        🛡️ has_gesture: requestDeviceChooser専用の追加ゲート(下記参照)。
+        他の全メソッドは無視する(paramsの一部ではなく、dispatch自体の
+        引数として独立させているのは、request_device_chooser以外のメソッドが
+        誤ってこれを見てしまうことがそもそも構造的に無いようにするため)。"""
         fn = self._DISPATCH_TABLE.get(method)
         if fn is None:
             return {"success": False, "error": not_found_error(f"unknown method: {method}")}
@@ -231,6 +246,8 @@ class WebUsbNativeBridge:
         if is_trusted_only and not trusted:
             return {"success": False, "error": security_error("this method is only available to the extension's own pages")}
         try:
+            if method == "requestDeviceChooser":
+                return fn(self, origin, params, has_gesture, locale)
             if is_trusted_only:
                 return fn(self, params)
             return fn(self, origin, params)
@@ -376,7 +393,18 @@ class WebUsbNativeBridge:
                 return {"success": False, "error": invalid_state_error(
                     f"interface {interface_number} must be claimed before sending a control transfer to it"
                 )}
-            iface_class = interface_class_for(dev, interface_number)
+            # 🛡️ v0.0.0a1: 「今まさに選択されているalternate setting」
+            # (active_alternates。claim_interface()で0初期化、
+            # selectAlternateInterface()で更新)を明示的に渡す。
+            # 2つ下のrecipient=endpoint分岐(_find_claimed_endpoint)は元々
+            # これと同じ考え方(claim済み・かつ選択中のalternateのみを見る)
+            # で実装されていたが、この分岐だけがinterface_class_for()の
+            # 「alternate setting未指定=常に0扱い」というデフォルトに
+            # 頼っていたため、alternate setting 0以外に切り替えた後は
+            # 実際に選択中のクラスではなく常にalt-0のクラスで判定してしまう
+            # 抜け穴になっていた。
+            alternate_setting = info["active_alternates"].get(interface_number, 0)
+            iface_class = interface_class_for(dev, interface_number, alternate_setting=alternate_setting)
             if req_type == _TYPE_CLASS and iface_class is not None and is_protected_interface_class(iface_class):
                 return {"success": False, "error": security_error(
                     f"class-specific control requests to protected interface class "
@@ -428,16 +456,47 @@ class WebUsbNativeBridge:
         except Exception as e:
             return {"devices": [], "error": safe_error_str(e)}
 
-    def request_device_chooser(self, origin, params):
+    def request_device_chooser(self, origin, params, has_gesture=False, locale=None):
+        """🛡️ v0.0.0a1(独立したセキュリティ監査を受けて): has_gestureは
+        page_polyfill.js自身の`navigator.userActivation.isActive`チェック
+        (これはページのMAIN worldで動くので、ページが直接
+        window.postMessage()を偽造すれば丸ごと迂回できてしまう——
+        content_script.jsが待ち受けているメッセージ形式さえ真似すれば
+        page_polyfill.jsのrequestDevice()自体を一度も呼ばずにこの
+        メソッドへ到達できる)とは全く別の、独立した検証である。
+        content_script.js は isolated world で動いており、documentへ
+        capturing listenerを張って`event.isTrusted === true`の
+        click/keydown/pointerdown だけを観測している——ページ側のJSは
+        isTrustedがtrueの合成イベントを一切作れない、ブラウザが保証する
+        性質なので、ここを経由したhas_gestureはページ自身に偽装しようが
+        ない(postMessageのdataに何を積んでも、content_script.js側は
+        それを一切参照せず、常に自分自身が観測した直近の本物の操作だけを
+        見て計算し直す。詳細はcontent_script.js参照)。
+        PySide6/QtWebEngine版(pyside6-webusb)ではDOM側のUser Activation
+        状態をホスト側から独立に観測する手段が無く「ハードルを上げる」
+        止まりだったのに対し、拡張機能のisolated worldというFirefox
+        固有の仕組みのおかげで、fox-webusbではこちらの方が実際に
+        ページ側から偽装不可能な、より強い保証になっている。
+        🌐 v0.0.0a1(i18n): localeはbackground.jsが
+        browser.i18n.getUILanguage()で求めた、Firefox自体のUI言語
+        (ページ自身のnavigator.languageではない——ネイティブメッセージング
+        越しに渡ってくるものなので、ページ自身のJSが直接偽装することは
+        できない)。チューザーダイアログ(Tkinter、GUIプロセスなので
+        browser.i18n相当の仕組みを持たない)の表示言語を選ぶためだけに
+        使う、表示上の好みであって、セキュリティ判定には一切使わない。"""
+        if not has_gesture:
+            return {"success": False, "error": security_error(
+                "requestDevice() must be called from within a user gesture handler"
+            )}
         filters = params.get("filters") or []
         exclusion_filters = params.get("exclusionFilters") or []
         try:
             with self._handle_guard("__chooser__"):
-                return self._request_device_chooser_impl(origin, filters, exclusion_filters)
+                return self._request_device_chooser_impl(origin, filters, exclusion_filters, locale)
         except _HandleBusyError:
             return {"success": False, "error": invalid_state_error("a device chooser is already open")}
 
-    def _request_device_chooser_impl(self, origin, filters, exclusion_filters):
+    def _request_device_chooser_impl(self, origin, filters, exclusion_filters, locale=None):
         for f in filters:
             if not is_valid_usb_device_filter(f):
                 return {"success": False, "error": security_error("invalid device filter")}
@@ -472,7 +531,7 @@ class WebUsbNativeBridge:
             return {"success": False, "error": not_found_error("no device chooser UI is available in this environment")}
 
         initial = descriptors_for_refresh()
-        selected = self._chooser_fn(initial, origin, descriptors_for_refresh)
+        selected = self._chooser_fn(initial, origin, descriptors_for_refresh, locale)
         if selected is None:
             return {"success": False, "error": not_found_error("the user did not select a device")}
 
@@ -489,6 +548,27 @@ class WebUsbNativeBridge:
         return {"success": True, "device": rich}
 
     def open_device(self, origin, params):
+        """🛡️ v0.0.0a1(独立したセキュリティ監査を受けて、pyside6-webusb側の
+        No.6を移植): 1オリジンが同時に保持できるハンドル数に上限を設ける。
+        以前はこれが無制限で、たった1台のデバイスへの正規の許可さえあれば、
+        closeDeviceを挟まずdevice.open()をループで呼び続けるだけの、
+        拡張機能の仕組みを一切迂回する必要もないごく普通のページJSで、
+        _open_devices(とその中のpyusb Deviceへの参照)を無制限に増やし
+        続けられた。これはFirefox本体のタブ/レンダラプロセスのメモリでは
+        なく、fox-webusb-hostという別プロセス自身のメモリを消費するため、
+        通常のタブ単位のメモリ上限では守られない。
+        方式はエラーでの拒否ではなくLRU的な自動退去: 上限に達している状態で
+        新規にopenする場合、そのオリジンが持つ最も古いハンドルを1つ実機の
+        リソースごと解放してから新しいハンドルを発行する——open_device()
+        自体は(通常のオープン処理が成功する限り)常に成功を返し続けつつ、
+        _open_devices のオリジンあたりの総数は上限で頭打ちになる。退去
+        させられた古いハンドルは以後_get_open_device_and_info()から見えなく
+        なり、それを使った操作は他の閉じたハンドルと同じ"Invalid handle"
+        として安全に失敗する。
+        本物のスレッドプールで同時に複数のopen_device()が走り得るため、
+        「数える→(必要なら)退去させる→追加する」を_open_devices_admission_lock
+        で直列化する(pyside6-webusb版はQtの単一スレッドモデルなのでこの
+        ロックは不要だった)。"""
         vendor_id = params.get("vendorId")
         product_id = params.get("productId")
         try:
@@ -499,16 +579,34 @@ class WebUsbNativeBridge:
                 return {"success": False, "error": not_found_error("device is not currently connected")}
             if device_is_fully_blocked(dev):
                 return {"success": False, "error": security_error("this device is on the security blocklist")}
-            with self._next_handle_lock:
-                handle_id = self._next_handle
-                self._next_handle += 1
-            self._open_devices[handle_id] = {
-                "device": dev, "origin": origin,
-                "vendor_id": vendor_id, "product_id": product_id,
-                "configuration_selected": False,
-                "claimed_interfaces": set(),
-                "active_alternates": {},
-            }
+            with self._open_devices_admission_lock:
+                same_origin_handles = [hid for hid, info in self._open_devices.items() if info.get("origin") == origin]
+                if len(same_origin_handles) >= self._MAX_OPEN_HANDLES_PER_ORIGIN:
+                    # dict(Python 3.7+)は挿入順を保持するので、フィルタ後の
+                    # 最初の要素がそのオリジンにとって最も古いハンドル。
+                    oldest_handle_id = same_origin_handles[0]
+                    evicted = self._open_devices.pop(oldest_handle_id, None)
+                    self._forget_handle_lock(oldest_handle_id)
+                    if evicted is not None and evicted.get("device") is not None:
+                        for interface_number in list(evicted.get("claimed_interfaces", [])):
+                            try:
+                                usb_util.release_interface(evicted["device"], interface_number)
+                            except Exception:
+                                pass
+                        try:
+                            usb_util.dispose_resources(evicted["device"])
+                        except Exception:
+                            pass
+                with self._next_handle_lock:
+                    handle_id = self._next_handle
+                    self._next_handle += 1
+                self._open_devices[handle_id] = {
+                    "device": dev, "origin": origin,
+                    "vendor_id": vendor_id, "product_id": product_id,
+                    "configuration_selected": False,
+                    "claimed_interfaces": set(),
+                    "active_alternates": {},
+                }
             return {"success": True, "handle": handle_id}
         except Exception as e:
             return {"success": False, "error": safe_error_str(e)}
@@ -544,7 +642,7 @@ class WebUsbNativeBridge:
             )}
         if interface_number in info["claimed_interfaces"]:
             return {"success": True}  # 仕様: 既にclaim済みのインターフェースへの再claimは単純成功
-        iface_class = interface_class_for(dev, interface_number)
+        iface_class = interface_class_for(dev, interface_number, alternate_setting=0)
         if iface_class is None:
             return {"success": False, "error": not_found_error(
                 f"interface {interface_number} was not found on the active configuration"
@@ -881,6 +979,70 @@ class WebUsbNativeBridge:
         ok = self._settings.revoke_all_for_origin(params.get("origin"))
         return {"success": ok}
 
+    def is_available(self, origin, params):
+        """🦊 v0.0.0a1: `navigator.usb`自体からは知りようがない、この実装
+        固有の状態を返す(pyside6-webusb版の同名メソッドと同じ形状・同じ
+        目的——F12 DevToolsからの簡易な動作確認・バージョン確認向け)。
+        オリジンを問わず誰でも呼べるページ向けメソッドとして安全なのは、
+        ここで返す情報がどれも「この拡張機能自身の実装についての一般情報」
+        であって、特定オリジンの許可状況やデバイスの詳細情報を一切含まない
+        ため(その手の情報はlistDevices()自体が既にオリジン単位で正しく
+        絞り込んで返しており、ここで重複して開示する必要が無い)。
+        🛡️ 以前はPAGE_METHODS(background.js)には既に列挙されていたが、
+        bridge.py側の実装自体と_DISPATCH_TABLEへの登録が漏れており、
+        呼び出すと(実装が存在しないため)常に"unknown method"エラーに
+        なっていた——コード上「用意されている」ことになっていた機能が
+        実際には一度も動いたことが無かった、という状態だった。"""
+        return {
+            "available": True,
+            "bridgeVersion": __version__,
+            "rustAccelerated": HAVE_RUST_ACCEL,
+            "transferLimits": {
+                "bulkTransferMaxLength": BULK_TRANSFER_MAX_LENGTH,
+                "controlTransferMaxLength": CONTROL_TRANSFER_MAX_LENGTH,
+            },
+        }
+
+    def get_attestation_public_key(self, origin, params):
+        """🦊 v0.0.0a1: ローカルアテステーション機能(独自拡張、attestation.py
+        参照)。呼び出し元オリジン専用のEd25519公開鍵をbase64で返す
+        (無ければこの呼び出しで初めて生成される)。
+        🛡️ 公開鍵を返すだけの操作であり、これ自体は機微情報の開示ではない
+        (公開鍵はその名のとおり公開して構わない情報であり、これだけを
+        知っていても署名を偽造することはできない)。ただしオリジンごとに
+        別々の鍵である設計そのものが重要なプライバシー特性であることに
+        注意——settings_store.pyのget_or_create_attestation_key_seed()
+        のコメント参照。"""
+        if not HAVE_ATTESTATION:
+            return {"success": False, "error": not_found_error(
+                "local attestation is unavailable on this host (the optional 'cryptography' package is not installed)"
+            )}
+        try:
+            seed_b64 = self._settings.get_or_create_attestation_key_seed(origin)
+            return {"success": True, "publicKey": attestation.public_key_b64_for_seed(seed_b64)}
+        except Exception as e:
+            return {"success": False, "error": safe_error_str(e)}
+
+    def sign_attestation_challenge(self, origin, params):
+        """🦊 v0.0.0a1: ローカルアテステーション機能。呼び出し元オリジン
+        専用の秘密鍵で、渡されたchallenge(base64)に署名して返す。
+        署名鍵自体を外部へ渡すことは無い(常にこのプロセス内で使うだけ)。"""
+        if not HAVE_ATTESTATION:
+            return {"success": False, "error": not_found_error(
+                "local attestation is unavailable on this host (the optional 'cryptography' package is not installed)"
+            )}
+        challenge_b64 = params.get("challenge")
+        if not isinstance(challenge_b64, str) or not challenge_b64:
+            return {"success": False, "error": type_error("challenge must be a non-empty base64-encoded string")}
+        try:
+            seed_b64 = self._settings.get_or_create_attestation_key_seed(origin)
+            signature_b64 = attestation.sign_challenge_b64(seed_b64, challenge_b64)
+            return {"success": True, "signature": signature_b64}
+        except ValueError as e:
+            return {"success": False, "error": type_error(safe_error_str(e))}
+        except Exception as e:
+            return {"success": False, "error": safe_error_str(e)}
+
     def diagnostics(self, params):
         try:
             with self._enumeration_lock:
@@ -952,6 +1114,9 @@ class WebUsbNativeBridge:
     ])
 
     _DISPATCH_TABLE = {
+        "isAvailable": is_available,
+        "getAttestationPublicKey": get_attestation_public_key,
+        "signAttestationChallenge": sign_attestation_challenge,
         "listDevices": list_devices,
         "requestDeviceChooser": request_device_chooser,
         "openDevice": open_device,

@@ -110,9 +110,17 @@ function dispatchDeviceEvent(msg) {
     browser.tabs.sendMessage(info.tabId, { __foxWebusbPush: true, event: msg.event, device: msg.device }, { frameId: info.frameId })
       .catch(function () { /* フレームが既に無くなっている等。次の登録更新やtabs.onRemovedで自然に片付く */ });
   });
+  // 🛡️/🦊 v0.0.0a1: 拡張機能自身(Firefox-style surface、下記参照)が
+  // このデバイスへの許可を持っている場合は、そちらのUSBインスタンスにも
+  // 同じconnect/disconnectを配送する——ページ向け(frameRegistry)と拡張機能
+  // 自身向け(extensionSurface)は別々のUSBインスタンスなので、片方に届いても
+  // もう片方には自動的に届かない。
+  if (origins.has(EXTENSION_ORIGIN) && extensionSurface) {
+    extensionSurface.core.dispatchConnectionEvent(msg.event, msg.device);
+  }
 }
 
-function callNative(method, origin, params, trusted) {
+function callNative(method, origin, params, trusted, hasGesture, locale) {
   return new Promise(function (resolve, reject) {
     if (!nativeAvailable) connectNative();
     if (!nativeAvailable) {
@@ -125,7 +133,10 @@ function callNative(method, origin, params, trusted) {
     var id = String(nextRequestId++);
     pendingRequests.set(id, { resolve: resolve, reject: reject });
     try {
-      nativePort.postMessage({ id: id, method: method, origin: origin, trusted: !!trusted, params: params || {} });
+      nativePort.postMessage({
+        id: id, method: method, origin: origin, trusted: !!trusted, hasGesture: !!hasGesture,
+        locale: locale || null, params: params || {},
+      });
     } catch (e) {
       pendingRequests.delete(id);
       reject(e);
@@ -142,7 +153,8 @@ function originFromSender(sender) {
 }
 
 var PAGE_METHODS = new Set([
-  'isAvailable', 'listDevices', 'requestDeviceChooser', 'openDevice', 'closeDevice',
+  'isAvailable', 'getAttestationPublicKey', 'signAttestationChallenge',
+  'listDevices', 'requestDeviceChooser', 'openDevice', 'closeDevice',
   'claimInterface', 'releaseInterface', 'selectConfiguration', 'selectAlternateInterface',
   'resetDevice', 'clearHalt', 'bulkTransferIn', 'bulkTransferOut', 'controlTransferIn',
   'controlTransferOut', 'isochronousTransferIn', 'isochronousTransferOut', 'forgetGrantedDevice',
@@ -178,7 +190,14 @@ browser.runtime.onMessage.addListener(function (message, sender) {
     if (PAGE_METHODS.has(method)) {
       var callerOrigin = originFromSender(sender);
       if (!callerOrigin) return Promise.resolve({ success: false, error: 'SecurityError: could not determine the calling origin' });
-      return callNative(method, callerOrigin, message.params, trusted).catch(function (e) {
+      // 🛡️ v0.0.0a1: message.hasGesture は content_script.js が isolated world
+      // 側で独立に計算したものであり(このスクリプト自身のドキュメントに
+      // 張ったcapturing listenerが観測した、本物のevent.isTrusted===trueの
+      // 操作のみに基づく)、message.params(ページが自由に詰め込める側)から
+      // ではなくmessage自身のトップレベルフィールドから読む。ページ側JSが
+      // 直接postMessageを偽造してcontent_script.jsをすり抜けようとしても、
+      // ここで信用するのはcontent_script.js自身が計算した値だけになる。
+      return callNative(method, callerOrigin, message.params, trusted, !!message.hasGesture, message.locale).catch(function (e) {
         return { success: false, error: 'NetworkError: ' + (e && e.message ? e.message : String(e)) };
       });
     }
@@ -218,3 +237,84 @@ function reapClosedOrigins(candidateOrigins) {
     }
   });
 }
+
+// ============================================================
+// 🦊 Firefox-style surface (v0.0.0a1)
+// ============================================================
+// README「二重サーフェス」参照。content_script.js/postMessageの中継を一切
+// 経由せず、この拡張機能自身の特権的なページ(background page自身、および
+// getBackgroundPage()経由のpopup.js)がWebUSB機能を直接使うための窓口。
+//
+// 🛡️ ここを通る呼び出しにgesture_token的な検証を課していない理由:
+// requestDeviceChooserのgesture検証(has_gesture、content_script.js参照)は
+// 「content_script.jsが待ち受けるpostMessageの形さえ真似すれば、任意の
+// Webページがpage_polyfill.jsのユーザー操作チェックを一度も通さずに
+// ホストへ到達できてしまう」という、Webページという第三者由来の脅威を
+// 防ぐためのものだった。この経路はそもそもWebコンテンツから到達不可能
+// (呼び出せるのはこの拡張機能自身のJSだけ——別のJS実行コンテキストから
+// 直接関数を呼ぶ手段はWebページには無い)なので、同じ脅威モデルが
+// 適用されない。実際の「本物のクリックか」の検証は、popup.js側で
+// requestDevice()を呼ぶ箇所自身が担う(実際のイベントハンドラの中で
+// 呼ぶ、という通常のコーディング規約の話であり、悪意ある第三者からの
+// 防御ではなく単なる誤用防止)。
+var EXTENSION_ORIGIN = new URL(browser.runtime.getURL('/')).origin;
+
+function _extensionSurfaceCallBridge(method, params) {
+  // requestDeviceChooser向けのhasGesture=trueは上記のとおり、Webページ
+  // からの偽造脅威が構造的に存在しないために付与している(常時true)。
+  // 他のメソッドにとってこの引数は無視されるだけなので無害。
+  return callNative(method, EXTENSION_ORIGIN, params, true, true).then(function (result) {
+    return result;
+  }, function (e) {
+    return { success: false, error: 'NetworkError: ' + (e && e.message ? e.message : String(e)) };
+  });
+}
+
+var extensionSurface = null;
+try {
+  if (typeof FoxWebusbCore !== 'undefined') {
+    var extensionCore = FoxWebusbCore.create(_extensionSurfaceCallBridge, { requestDeviceNeedsGesture: false });
+    extensionSurface = { core: extensionCore };
+    // background page自身も(隠れているとはいえ)実際のHTML文書なので、
+    // navigator が本物として存在する。ここへ取り付けておけば、
+    // getBackgroundPage() 越しに popup.js からも
+    // `bg.navigator.usb` としてそのまま参照できる。
+    if (typeof navigator !== 'undefined') {
+      try {
+        Object.defineProperty(navigator, 'usb', {
+          value: extensionCore.usb, writable: false, configurable: false, enumerable: true,
+        });
+      } catch (e) { /* 既に何か定義済みなら諦める(background page内で他に定義する理由は通常無いはずだが念のため) */ }
+    }
+  }
+} catch (e) {
+  console.error('[fox-webusb] Firefox-style surfaceの初期化に失敗しました:', e);
+}
+
+// ============================================================
+// 🦊 独自コマンド拡張: window.__foxWebUsbManagement (v0.0.0a1)
+// ============================================================
+// WebUSB仕様には存在しない、この実装固有の管理系操作
+// (listKnownDevices等、TRUSTED_ONLY_METHODS参照)を、拡張機能自身の
+// 特権的なページ(options.js/popup.js)から人間工学的に呼べるようにする。
+// 🛡️ 互換性について: navigator.usb自体の形状・挙動には一切手を加えない
+// ——これはnavigator.usbとは別の、background page自身のグローバルスコープに
+// 生える、完全に独立した名前空間である。既存のoptions.js/popup.jsが
+// browser.runtime.sendMessage()を手組みする代わりに
+// `browser.runtime.getBackgroundPage().then(bg => bg.__foxWebUsbManagement.X())`
+// と書けるようにするための、単なる薄い糖衣構文。実際の認可判定
+// (trusted=trueの検証)は従来どおりネイティブホスト側のdispatch()が行う
+// ——ここはあくまで「呼び方」を整理するだけで、新しい権限を何も追加しない。
+window.__foxWebUsbManagement = {
+  listKnownDevices: function () { return callNative('listKnownDevices', null, {}, true); },
+  forgetKnownDevice: function (vendorId, productId) {
+    return callNative('forgetKnownDevice', null, { vendorId: vendorId, productId: productId }, true);
+  },
+  forgetAllKnownDevices: function () { return callNative('forgetAllKnownDevices', null, {}, true); },
+  listGrantedOrigins: function () { return callNative('listGrantedOrigins', null, {}, true); },
+  revokeOriginGrant: function (origin, vendorId, productId) {
+    return callNative('revokeOriginGrant', null, { origin: origin, vendorId: vendorId, productId: productId }, true);
+  },
+  revokeAllForOrigin: function (origin) { return callNative('revokeAllForOrigin', null, { origin: origin }, true); },
+  diagnostics: function () { return callNative('diagnostics', null, {}, true); },
+};

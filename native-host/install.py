@@ -57,19 +57,44 @@ def _support_dir() -> Path:
 
 
 def _write_launcher(python_executable: str) -> Path:
+    """🛡️ v0.0.0a1(実機検証フィードバックに基づく修正): ランチャー自体に
+    PYTHONPATH(このリポジトリの native-host/src の絶対パス)を明示的に
+    埋め込むようにした。
+    以前はランチャーが単に `python -m fox_webusb_host` を実行するだけで、
+    `fox_webusb_host` がその python から実際にimportできるかどうかは
+    「事前に `pip install -e .` を済ませてあること」に完全に依存していた。
+    実際にWindows + LibreWolf環境で検証していただいた際、この前提が
+    崩れる形(pip installを飛ばした、あるいは--pythonで指定したものとは
+    別のインタプリタでpip installしてしまった等)で
+    `ModuleNotFoundError: No module named 'fox_webusb_host'` が発生し、
+    ユーザー自身がランチャーへ手動で
+    `set "PYTHONPATH=...\\native-host\\src"` を書き足すことで解決する
+    しかなかった(`checklog2.md` 参照)。
+    この修正は、その手動での対処を自動化するもの——`pip install -e .`が
+    正しく効いている場合には無害(既にimportできる場所へPYTHONPATHで
+    もう1つ同じ場所を追加で通すだけ)であり、効いていない場合の
+    セーフティネットとして働く。あくまでセーフティネットなので、
+    `pip install -e .`を実行して依存関係(pyusb等)も含めて正しく
+    インストールしておくことが引き続き推奨手順である
+    (このスクリプト冒頭のdocstring参照)。"""
     support_dir = _support_dir()
     support_dir.mkdir(parents=True, exist_ok=True)
+    src_dir = (Path(__file__).resolve().parent / "src")
 
     if sys.platform.startswith("win"):
         launcher = support_dir / "fox-webusb-host.bat"
         launcher.write_text(
-            f'@echo off\r\n"{python_executable}" -m fox_webusb_host %*\r\n',
+            f'@echo off\r\n'
+            f'set "PYTHONPATH={src_dir};%PYTHONPATH%"\r\n'
+            f'"{python_executable}" -m fox_webusb_host %*\r\n',
             encoding="utf-8",
         )
     else:
         launcher = support_dir / "fox-webusb-host.sh"
         launcher.write_text(
-            f'#!/bin/sh\nexec "{python_executable}" -m fox_webusb_host "$@"\n',
+            f'#!/bin/sh\n'
+            f'export PYTHONPATH="{src_dir}:$PYTHONPATH"\n'
+            f'exec "{python_executable}" -m fox_webusb_host "$@"\n',
             encoding="utf-8",
         )
         mode = launcher.stat().st_mode

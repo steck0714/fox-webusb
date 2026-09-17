@@ -96,9 +96,9 @@ class _ChooserGui:
         def poll():
             try:
                 while True:
-                    devices, origin, refresh_callback, future = self._queue.get_nowait()
+                    devices, origin, refresh_callback, locale, future = self._queue.get_nowait()
                     try:
-                        selected = show_chooser(root, devices, origin, refresh_callback)
+                        selected = show_chooser(root, devices, origin, refresh_callback, locale)
                         if not future.cancelled():
                             future.set_result(selected)
                     except Exception as e:
@@ -112,9 +112,9 @@ class _ChooserGui:
         self._ready.set()
         root.mainloop()
 
-    def choose(self, devices, origin, refresh_callback):
+    def choose(self, devices, origin, refresh_callback, locale=None):
         future = concurrent.futures.Future()
-        self._queue.put((devices, origin, refresh_callback, future))
+        self._queue.put((devices, origin, refresh_callback, locale, future))
         return future.result()
 
     @property
@@ -146,9 +146,11 @@ def main():
         method = msg.get("method")
         origin = msg.get("origin")
         trusted = bool(msg.get("trusted"))
+        has_gesture = bool(msg.get("hasGesture"))
+        locale = msg.get("locale") if isinstance(msg.get("locale"), str) else None
         params = msg.get("params") or {}
         try:
-            result = bridge.dispatch(method, origin, trusted, params)
+            result = bridge.dispatch(method, origin, trusted, params, has_gesture=has_gesture, locale=locale)
         except Exception as e:  # 🛡️ dispatch()自体は内部で既に広くtry/exceptしているが、最後の砦としてもう一段
             _log(f"unhandled exception while dispatching {method!r}:", e)
             _log(traceback.format_exc())

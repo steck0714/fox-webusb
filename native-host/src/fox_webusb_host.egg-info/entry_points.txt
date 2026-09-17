@@ -1,0 +1,2 @@
+[console_scripts]
+fox-webusb-host = fox_webusb_host.__main__:main

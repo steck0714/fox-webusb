@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fox-webusb-host"
-version = "0.0.0a0"
+version = "0.0.0a1"
 description = "Firefox native-messaging host for fox-webusb: a WebUSB (navigator.usb) polyfill for Firefox, ported from pyside6-webusb. Talks to real USB hardware via pyusb/libusb on behalf of the fox-webusb WebExtension."
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
@@ -22,6 +22,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+]
+# 🛡️ v0.0.0a1: ローカルアテステーション機能(attestation.py)用。基本機能
+# (デバイスへの接続・転送等)には一切不要な、独立したオプトイン機能なので、
+# HAVE_RUST_ACCELの native/fox_webusb_accel/ と同じ「無ければ機能を
+# 無効化するだけ」という設計方針にし、必須依存には加えていない。
+attestation = [
+    "cryptography>=41",
 ]
 
 # native/fox_webusb_accel/ (Rustアクセラレーション) は意図的にここに列挙して

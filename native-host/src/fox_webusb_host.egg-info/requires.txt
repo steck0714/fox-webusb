@@ -1,0 +1,7 @@
+pyusb>=1.2
+
+[attestation]
+cryptography>=41
+
+[dev]
+pytest>=7.0

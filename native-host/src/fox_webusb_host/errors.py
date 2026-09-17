@@ -46,3 +46,11 @@ def invalid_access_error(message):
 def index_size_error(message):
     """数値が許容範囲外(例: endpoint番号が1-15の範囲外)。"""
     return _prefixed("IndexSizeError", message)
+
+
+def type_error(message):
+    """仕様上TypeErrorになるべき構造検証違反。⚠️ これは他の全プレフィックスと
+    違いDOMExceptionではなく、実ブラウザと同じ**組み込みのTypeError**として
+    JS側へ届く必要がある(webusb_core.js側のthrowFromResult()がこの
+    プレフィックスだけ特別扱いする)。"""
+    return _prefixed("TypeError", message)

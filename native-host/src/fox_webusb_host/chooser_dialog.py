@@ -29,8 +29,10 @@ Tkinter(標準ライブラリ、追加インストール不要)に置き換え�
 import tkinter as tk
 from tkinter import ttk
 
+from .i18n import translate
 
-def _device_label(device: dict) -> tuple:
+
+def _device_label(device: dict, locale=None) -> tuple:
     """(1行目=太字で見せたい主表示, 2行目=補足)のペアを返す。
     移植元の _DeviceRowWidget が「製品名(無ければVID:PID)」+
     「メーカー名 vendorId:productId [既知デバイスなら再接続回数]」という
@@ -41,14 +43,17 @@ def _device_label(device: dict) -> tuple:
     manufacturer = device.get("manufacturerName") or ""
     vid_pid = f"{vendor_id:04x}:{product_id:04x}"
 
-    primary = product_name if product_name else f"Unknown device ({vid_pid})"
+    primary = product_name if product_name else translate(locale, "unknownDevice", vid_pid=vid_pid)
     detail_parts = []
     if manufacturer:
         detail_parts.append(manufacturer)
     detail_parts.append(vid_pid)
     connect_count = device.get("connectCount")
     if connect_count:
-        detail_parts.append(f"connected {connect_count}x before" if connect_count > 1 else "connected before")
+        detail_parts.append(
+            translate(locale, "connectedNTimesBefore", count=connect_count) if connect_count > 1
+            else translate(locale, "connectedOnceBefore")
+        )
     return primary, "  ·  ".join(detail_parts)
 
 
@@ -76,9 +81,10 @@ class ChooserDialog(tk.Toplevel):
 
     REFRESH_INTERVAL_MS = 1500
 
-    def __init__(self, parent, devices, origin, refresh_callback):
+    def __init__(self, parent, devices, origin, refresh_callback, locale=None):
         super().__init__(parent)
-        self.title("Connect a USB device")
+        self._locale = locale
+        self.title(translate(locale, "chooserTitle"))
         self.selected_device = None
         self._refresh_callback = refresh_callback
         self._devices = list(devices)
@@ -92,13 +98,12 @@ class ChooserDialog(tk.Toplevel):
         outer.pack(fill="both", expand=True)
 
         ttk.Label(
-            outer, text=origin or "(unknown origin)",
+            outer, text=origin or translate(locale, "unknownOrigin"),
             font=("TkDefaultFont", 11, "bold"), wraplength=440,
         ).pack(anchor="w")
         ttk.Label(
             outer,
-            text="wants to connect to a USB device. Only choose a device you recognize "
-                 "and trust — the site will be able to send and receive raw data with it.",
+            text=translate(locale, "trustReminder"),
             wraplength=440, foreground="#555555",
         ).pack(anchor="w", pady=(2, 12))
 
@@ -108,9 +113,9 @@ class ChooserDialog(tk.Toplevel):
         )
         self._tree.heading("#0", text="")
         self._tree.column("#0", width=0, stretch=False)
-        self._tree.heading("name", text="Device")
+        self._tree.heading("name", text=translate(locale, "columnDevice"))
         self._tree.column("name", width=220, anchor="w")
-        self._tree.heading("detail", text="Details")
+        self._tree.heading("detail", text=translate(locale, "columnDetails"))
         self._tree.column("detail", width=260, anchor="w")
         self._tree.pack(fill="both", expand=True)
         self._tree.bind("<<TreeviewSelect>>", self._on_selection_changed)
@@ -118,10 +123,10 @@ class ChooserDialog(tk.Toplevel):
 
         button_row = ttk.Frame(outer)
         button_row.pack(fill="x", pady=(12, 0))
-        ttk.Label(button_row, text="No device selected yet.", foreground="#777777").pack(side="left")
-        self._connect_btn = ttk.Button(button_row, text="Connect", command=self._on_connect, state="disabled")
+        ttk.Label(button_row, text=translate(locale, "noSelection"), foreground="#777777").pack(side="left")
+        self._connect_btn = ttk.Button(button_row, text=translate(locale, "connectButton"), command=self._on_connect, state="disabled")
         self._connect_btn.pack(side="right")
-        ttk.Button(button_row, text="Cancel", command=self._on_cancel).pack(side="right", padx=(0, 8))
+        ttk.Button(button_row, text=translate(locale, "cancelButton"), command=self._on_cancel).pack(side="right", padx=(0, 8))
 
         self._populate(self._devices, preserve_selection=False)
 
@@ -145,7 +150,7 @@ class ChooserDialog(tk.Toplevel):
         self._devices = list(devices)
         restore_iid = None
         for i, device in enumerate(self._devices):
-            primary, detail = _device_label(device)
+            primary, detail = _device_label(device, self._locale)
             iid = str(i)
             self._tree.insert("", "end", iid=iid, values=(primary, detail))
             if previous_identity is not None and _device_identity(device) == previous_identity:
@@ -196,12 +201,14 @@ class ChooserDialog(tk.Toplevel):
         self.destroy()
 
 
-def show_chooser(root, devices, origin, refresh_callback):
+def show_chooser(root, devices, origin, refresh_callback, locale=None):
     """root(Tkスレッド上で作られた常駐ルート)の子としてChooserDialogを1個表示し、
     閉じるまでブロックしてから選択結果(dictまたはNone)を返す。この関数自体は
     必ずTkinterのメインスレッド(rootを作ったスレッド)から呼び出すこと——
     __main__.py 側は、この関数呼び出し自体をGUIスレッドのイベントループ上で
-    実行されるコールバックの中からのみ行う。"""
-    dlg = ChooserDialog(root, devices, origin, refresh_callback)
+    実行されるコールバックの中からのみ行う。
+    locale: 表示言語(i18n.py参照)。bridge.py経由でbackground.jsの
+    browser.i18n.getUILanguage()の値がそのまま渡ってくる想定。"""
+    dlg = ChooserDialog(root, devices, origin, refresh_callback, locale)
     root.wait_window(dlg)
     return dlg.selected_device

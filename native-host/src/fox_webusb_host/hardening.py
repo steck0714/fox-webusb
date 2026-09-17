@@ -324,7 +324,7 @@ def build_configurations_tree(dev, usb_util) -> list:
     return configurations
 
 
-def interface_class_for(dev, interface_number):
+def interface_class_for(dev, interface_number, alternate_setting=0):
     """指定インターフェース番号のbInterfaceClassを、デバイスの現在アクティブな
     configuration内から取得する(claimInterface/controlTransfer検証時のHID等
     ブロック判定に使う)。取得できない場合は-1ではなくNoneを返す
@@ -333,14 +333,33 @@ def interface_class_for(dev, interface_number):
     探索は常に「現在アクティブなconfiguration」内のものだけに限定する
     (非アクティブ側にたまたま同じ番号のインターフェースがあった場合に誤って
     拾わないため)。アクティブなconfiguration自体が特定できない場合も
-    安全側(None)に倒す。"""
+    安全側(None)に倒す。
+    🛡️ v0.0.0a1(独立したセキュリティ監査を受けて): alternate_setting引数を
+    追加した。以前はこの関数がalternate settingという概念を一切知らず、
+    「指定interface番号に一致する最初のInterfaceエントリ」のクラスだけを
+    返していた。複合デバイスがalternate setting 0を無害なクラス、alternate
+    setting 1を保護対象クラス(HID等)として宣言した場合、claim_interface()の
+    保護対象クラス判定や_control_transfer_validation_error()のinterface
+    recipient分岐がこれだけを根拠に許可してしまい得た
+    (pyside6-webusb側の監査で見つかったCVE-2018-6125と同種の回避策。
+    詳細はCHANGELOG.md参照)。このモジュール内の他のあらゆる箇所
+    (_find_claimed_endpoint()、claim_interface()直後のset_interface_altsetting
+    呼び出し)は既に「claim済みインターフェースは常にUSB仕様どおり
+    alternate setting 0から始まり、selectAlternateInterface()でのみ変わる」
+    という前提でinfo["active_alternates"]を追跡・参照していたため、
+    デフォルト値を0にしておけば、既存の全呼び出し元(2引数のまま)は
+    従来どおり「claim直後、またはalternate切り替え前」の状態については
+    正しく動き続け、選択中のalternate settingを追跡している呼び出し元
+    (claim_interface、_control_transfer_validation_error)は
+    info["active_alternates"].get(interface_number, 0)を明示的に渡すことで、
+    実際に選択されているalternate settingだけを見るようになる。"""
     try:
         cfg = dev.get_active_configuration()
     except Exception:
         return None
     try:
         for intf in cfg:
-            if intf.bInterfaceNumber == interface_number:
+            if intf.bInterfaceNumber == interface_number and getattr(intf, "bAlternateSetting", 0) == alternate_setting:
                 return intf.bInterfaceClass
     except Exception:
         pass
@@ -589,6 +608,42 @@ def safe_error_str(exc, max_len: int = 500) -> str:
     if len(msg) > max_len:
         msg = msg[:max_len] + "…"
     return msg
+
+
+# 🛡️ v0.0.0a1: pyside6-webusb側の独立したセキュリティ監査(No.3)で見つかった
+# 問題をこちらにも移植したもの。U+202A-U+202E(LRE/RLE/PDF/LRO/RLO、いわゆる
+# "bidi override")とU+2066-U+2069(LRI/RLI/FSI/PDI)。RLO等を使うと
+# "cod.exe" のような文字列の表示順を入れ替えて "exe.doc" のように見せかけ
+# られる、実際に知られたUIスプーフィング手法。
+_BIDI_OVERRIDE_CHARS = "".join(chr(c) for c in list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)))
+_DEVICE_STRING_MAX_LEN = 255  # USB文字列記述子自体の実務上の上限より十分大きい保守的な上限
+
+
+def sanitize_device_string(value, max_len: int = _DEVICE_STRING_MAX_LEN):
+    """USBデバイス自身が返す文字列記述子(manufacturerName/productName/
+    serialNumber/configurationName/interfaceName)向けのサニタイザー。
+    🛡️ これらの文字列はエラーメッセージ(safe_error_str()の対象)よりも
+    さらに攻撃者(=デバイス自身)制御下にあるにもかかわらず、従来は
+    safe_error_str()と同水準のサニタイズが一切適用されておらず、制御文字・
+    bidiオーバーライド文字・無制限長がbuild_device_descriptor()を素通り
+    していた。チューザーダイアログ(Tkinter)を含む全ての利用箇所で一律に
+    安全になるよう、生成元であるこの関数側で対処する。
+    ⚠️ Tkinterのchooser_dialog.py自体はQtのQLabelと違いデフォルトで
+    リッチテキスト/HTMLを解釈しないため、pyside6-webusb版のNo.3で
+    別途必要だった「QLabelにPlainTextを強制する」対応に相当するものは
+    fox-webusb側には不要(Tkinter Labelは常にプレーンテキスト表示)。
+    ただし制御文字・bidiオーバーライド文字は描画エンジン(フォント
+    シェーピング)レベルの話でツールキットを問わず影響し得るため、
+    こちらのサニタイズは同様に必要。
+    None/非文字列はそのまま返す(iManufacturer等が無い場合のNoneは
+    正当な「無し」を表す値であり、空文字列に化けさせるべきではない)。"""
+    if not isinstance(value, str):
+        return value
+    cleaned = "".join(ch for ch in value if not (ch <= "\x1f" or "\x7f" <= ch <= "\x9f"))
+    cleaned = "".join(ch for ch in cleaned if ch not in _BIDI_OVERRIDE_CHARS)
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len] + "…"
+    return cleaned
 
 
 # ============================================================
