@@ -1,0 +1,64 @@
+{
+  "extensionName": { "message": "fox-webusb", "description": "扩展名称 (manifest.json 的 name)" },
+  "extensionDescription": { "message": "在 Firefox 中提供与 WebUSB (navigator.usb) 兼容的填充实现。对实际 USB 设备的访问通过本地运行的原生消息主机(一个独立进程)完成。", "description": "扩展说明 (manifest.json 的 description)" },
+
+  "popupTitle": { "message": "fox-webusb" },
+  "statusChecking": { "message": "正在检查…" },
+  "statusConnected": { "message": "已连接到本地主机" },
+  "statusNotConnected": { "message": "无法连接到本地主机" },
+  "statusNotConnectedDetailFallback": { "message": "可能尚未安装 fox-webusb-host。请查看选项页面中的安装步骤。" },
+  "labelDeviceCount": { "message": "当前可见的 USB 设备数" },
+  "labelRustAccel": { "message": "Rust 加速" },
+  "rustAccelEnabled": { "message": "已启用" },
+  "rustAccelDisabled": { "message": "未构建(回退到标准 base64 实现)" },
+  "buttonOpenOptions": { "message": "管理设备与权限" },
+  "buttonRetry": { "message": "重试连接" },
+
+  "optionsTitle": { "message": "fox-webusb 设置" },
+  "leadTextBeforeLink": { "message": "Firefox 尚未实现" },
+  "leadTextCode": { "message": "navigator.usb" },
+  "leadTextMidLink": { "message": "(WebUSB) (" },
+  "leadTextLinkLabel": { "message": "Mozilla 的官方立场" },
+  "leadTextAfterLink": { "message": "认为其“有害”)。本扩展通过本地运行的原生消息主机(一个 Python 进程)访问真实 USB 设备,以提供等效的 API。" },
+
+  "statusNotConnectedDetailSetup": { "message": "请查看下方的安装步骤。" },
+  "statusUnavailable": { "message": "无法获取状态" },
+
+  "setupHeading": { "message": "安装步骤" },
+  "setupStep1": { "message": "请确认已安装 Python 3.9 或更高版本。" },
+  "setupStep2Intro": { "message": "在本插件附带的 native-host/ 文件夹中执行:" },
+  "setupStep3Intro": { "message": "(可选,推荐) 如需更快的 base64 处理速度,在已具备 Rust 工具链(rustc/cargo,1.74 以上)的环境中执行:" },
+  "setupStep3Note": { "message": "即使不构建此项,标准 Python 实现也能完整工作。" },
+  "setupStep4": { "message": "在 about:debugging#/runtime/this-firefox 页面的“临时载入附加组件”中载入本扩展(选择 extension/manifest.json)。" },
+  "setupStep5": { "message": "当上方状态变为绿色时即表示准备就绪。" },
+
+  "grantedOriginsHeading": { "message": "已授权的来源" },
+  "grantedOriginsLead": { "message": "网站通过 requestDevice() 让用户选择并获得授权的 USB 设备列表。" },
+  "noOriginsMessage": { "message": "尚无已授权的来源。" },
+  "buttonRevoke": { "message": "撤销" },
+  "buttonRevokeAllForOrigin": { "message": "撤销该来源的全部授权" },
+
+  "knownDevicesHeading": { "message": "已知设备" },
+  "knownDevicesLead": { "message": "曾被选择过至少一次的 USB 设备历史记录(用于设备选择对话框中的排序,与授权本身是不同的信息)。" },
+  "noKnownDevicesMessage": { "message": "尚无历史记录。" },
+  "buttonForgetDevice": { "message": "从历史记录中删除" },
+  "buttonForgetAllKnown": { "message": "清除全部历史记录" },
+  "buttonRefresh": { "message": "刷新" },
+  "unknownDeviceName": { "message": "(未知设备)" },
+
+  "loadingMessage": { "message": "正在加载…" },
+  "loadFailedMessage": { "message": "加载失败: $ERROR$", "placeholders": { "error": { "content": "$1" } } },
+
+  "tableHeaderDevice": { "message": "设备" },
+  "tableHeaderVidPid": { "message": "VID:PID" },
+  "tableHeaderConnectCount": { "message": "连接次数" },
+  "tableHeaderLastConnected": { "message": "最后连接时间" },
+
+  "chooserHeading": { "message": "$ORIGIN$ 请求连接 USB 设备", "placeholders": { "origin": { "content": "$1" } } },
+  "chooserHeadingNoOrigin": { "message": "有请求要求连接 USB 设备" },
+  "chooserTrustReminder": { "message": "仅当您信任发出请求的网站时才选择设备。" },
+  "chooserNoDevices": { "message": "未找到匹配的设备。" },
+  "chooserConnectButton": { "message": "连接" },
+  "chooserCancelButton": { "message": "取消" },
+  "chooserSearchPlaceholder": { "message": "搜索设备…" }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "org.fox_webusb.host",
+  "description": "fox-webusb native messaging host: bridges the fox-webusb Firefox extension's navigator.usb polyfill to real USB hardware via pyusb/libusb.",
+  "path": "__LAUNCHER_PATH__",
+  "type": "stdio",
+  "allowed_extensions": ["__EXTENSION_ID__"]
+}

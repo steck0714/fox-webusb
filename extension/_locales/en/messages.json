@@ -1,0 +1,64 @@
+{
+  "extensionName": { "message": "fox-webusb", "description": "Extension name (manifest.json name)" },
+  "extensionDescription": { "message": "Provides a WebUSB (navigator.usb) compatible polyfill in Firefox. Access to real USB devices happens through a local native messaging host (a separate process).", "description": "Extension description (manifest.json description)" },
+
+  "popupTitle": { "message": "fox-webusb" },
+  "statusChecking": { "message": "Checking…" },
+  "statusConnected": { "message": "Connected to the native host" },
+  "statusNotConnected": { "message": "Cannot connect to the native host" },
+  "statusNotConnectedDetailFallback": { "message": "fox-webusb-host may not be installed. See the setup steps on the options page." },
+  "labelDeviceCount": { "message": "USB devices currently visible" },
+  "labelRustAccel": { "message": "Rust acceleration" },
+  "rustAccelEnabled": { "message": "enabled" },
+  "rustAccelDisabled": { "message": "not built (falling back to standard base64)" },
+  "buttonOpenOptions": { "message": "Manage devices & permissions" },
+  "buttonRetry": { "message": "Retry connection" },
+
+  "optionsTitle": { "message": "fox-webusb settings" },
+  "leadTextBeforeLink": { "message": "Firefox does not implement" },
+  "leadTextCode": { "message": "navigator.usb" },
+  "leadTextMidLink": { "message": "(WebUSB) (" },
+  "leadTextLinkLabel": { "message": "Mozilla's official position" },
+  "leadTextAfterLink": { "message": "is \"harmful\"). This extension provides an equivalent API by accessing real USB devices through a locally running native messaging host (a Python process)." },
+
+  "statusNotConnectedDetailSetup": { "message": "See the setup steps below." },
+  "statusUnavailable": { "message": "Could not retrieve status" },
+
+  "setupHeading": { "message": "Setup" },
+  "setupStep1": { "message": "Make sure Python 3.9 or newer is installed." },
+  "setupStep2Intro": { "message": "In the native-host/ folder bundled with this add-on, run:" },
+  "setupStep3Intro": { "message": "(Optional, recommended) For faster base64 handling, with a Rust toolchain (rustc/cargo, 1.74+) available:" },
+  "setupStep3Note": { "message": "Everything still works fully with the plain Python implementation even without building this." },
+  "setupStep4": { "message": "Load this extension from \"Load Temporary Add-on\" at about:debugging#/runtime/this-firefox (select extension/manifest.json)." },
+  "setupStep5": { "message": "You're ready once the status above turns green." },
+
+  "grantedOriginsHeading": { "message": "Origins you've granted access to" },
+  "grantedOriginsLead": { "message": "USB devices a site let the user pick via requestDevice(), and that were granted." },
+  "noOriginsMessage": { "message": "No origins have been granted access yet." },
+  "buttonRevoke": { "message": "Revoke" },
+  "buttonRevokeAllForOrigin": { "message": "Revoke all grants for this origin" },
+
+  "knownDevicesHeading": { "message": "Known devices" },
+  "knownDevicesLead": { "message": "History of USB devices that have been selected at least once (used to sort the device chooser dialog; separate from the permission grants themselves)." },
+  "noKnownDevicesMessage": { "message": "No history yet." },
+  "buttonForgetDevice": { "message": "Remove from history" },
+  "buttonForgetAllKnown": { "message": "Clear all history" },
+  "buttonRefresh": { "message": "Refresh" },
+  "unknownDeviceName": { "message": "(unknown device)" },
+
+  "loadingMessage": { "message": "Loading…" },
+  "loadFailedMessage": { "message": "Failed to load: $ERROR$", "placeholders": { "error": { "content": "$1" } } },
+
+  "tableHeaderDevice": { "message": "Device" },
+  "tableHeaderVidPid": { "message": "VID:PID" },
+  "tableHeaderConnectCount": { "message": "Connections" },
+  "tableHeaderLastConnected": { "message": "Last connected" },
+
+  "chooserHeading": { "message": "$ORIGIN$ wants to connect to a USB device", "placeholders": { "origin": { "content": "$1" } } },
+  "chooserHeadingNoOrigin": { "message": "A USB device connection has been requested" },
+  "chooserTrustReminder": { "message": "Only select a device if you trust the requesting site." },
+  "chooserNoDevices": { "message": "No matching devices were found." },
+  "chooserConnectButton": { "message": "Connect" },
+  "chooserCancelButton": { "message": "Cancel" },
+  "chooserSearchPlaceholder": { "message": "Search devices…" }
+}
