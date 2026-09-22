@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """uninstall.py: install.py が作成したランチャー・マニフェスト・
-(Windowsの場合)レジストリキーを取り除く。settings_store.py が管理する
-許可情報(~/.config/fox-webusb/settings.json 等)はここでは消さない
-——単にFirefoxとの接続を切るだけで、許可履歴を消すのは別の操作として
-扱うべきだと考えたため。全て消したい場合は、install.pyの出力に表示された
-設定ファイルのパスを手動で削除すること。"""
+(Windowsの場合)レジストリキー・(指定していた場合)xpiバージョンの記録
+ファイルを取り除く。settings_store.py が管理する許可情報
+(~/.config/fox-webusb/settings.json 等)はここでは消さない——単に
+Firefoxとの接続を切るだけで、許可履歴を消すのは別の操作として扱うべきだと
+考えたため。全て消したい場合は、install.pyの出力に表示された設定ファイルの
+パスを手動で削除すること。
+
+🆕 v0.0.0.3: v0.0.0.3以降のinstall.pyは、ランチャーとして自前のスクリプトを
+書かずpipが生成したコンソールスクリプトをそのまま使うことが多くなった
+(`install.py`の`_write_launcher()`参照)。その場合、以下の
+`launcher_path`(`_support_dir()`配下の固定パス)は最初から存在しないため、
+`FileNotFoundError`として静かにスキップされる——pip自身が管理する
+コンソールスクリプトそのものを、この`uninstall.py`が誤って削除することは
+無い(`pip uninstall fox-webusb-host`側の役目)。"""
 import sys
 from pathlib import Path
 
@@ -35,7 +44,9 @@ def main():
         manifest_path = _linux_manifest_dir() / f"{HOST_NAME}.json"
         launcher_path = _support_dir() / "fox-webusb-host.sh"
 
-    for path in (manifest_path, launcher_path):
+    xpi_record_path = _support_dir() / "paired-xpi-version.json"
+
+    for path in (manifest_path, launcher_path, xpi_record_path):
         try:
             path.unlink()
             removed.append(str(path))

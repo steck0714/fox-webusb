@@ -1,14 +1,19 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 🆕 v0.0.0.3: setuptools>=77 (以前は>=68)。姉妹プロジェクトpyside6-webusbが
+# 0.0.5a0で見つけたのと同じ理由: 下記 `license = "MIT"` のSPDX式1行形式は
+# setuptools>=77が要求する。実際に `python -m build` を走らせて
+# `project.license` テーブル形式への非推奨警告(2027-02-18に削除予定)を
+# 確認した上での対応(検査だけでなく実際にビルドして見つけた)。
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "fox-webusb-host"
-version = "0.0.0.2"
+version = "0.0.0.3"
 description = "Firefox native-messaging host for fox-webusb: a WebUSB (navigator.usb) polyfill for Firefox, ported from pyside6-webusb. Talks to real USB hardware via pyusb/libusb on behalf of the fox-webusb WebExtension."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
     "pyusb>=1.2",
 ]
@@ -45,3 +50,9 @@ where = ["src"]
 
 [project.scripts]
 fox-webusb-host = "fox_webusb_host.__main__:main"
+# 🆕 v0.0.0.3: 姉妹プロジェクトpyside6-webusbの`pyside6-webusb-doctor`
+# (0.0.5a0で追加)と同じ発想の環境診断コマンド。`fox-webusb-host`本体
+# (Firefoxから直接起動される、標準入出力を使う常駐プロセス)とは完全に別の
+# エントリポイントにしている——診断ツールが本体の起動契約に一切影響しない
+# ようにするため。
+fox-webusb-host-doctor = "fox_webusb_host.diagnostics:main"
