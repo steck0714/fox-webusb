@@ -191,6 +191,24 @@ Chromium surface     Firefox-style surface
    `install.py` は Linux (`~/.mozilla/native-messaging-hosts/`)・
    macOS (`~/Library/Application Support/Mozilla/NativeMessagingHosts/`)・
    Windows (レジストリキー経由) いずれにも対応しています。
+   🆕 v0.0.0.3: `pip install`(または`pip install -e .`)が生成した
+   `fox-webusb-host`コンソールスクリプトをそのままネイティブメッセージング
+   の起動パスとして使うようになり、以前のような独自のPYTHONPATH埋め込みは
+   不要になりました。別の仮想環境のPythonを使いたい場合は
+   `python3 install.py --python /path/to/venv/bin/python3` のように
+   指定してください(そのvenvに対して`pip install -e .`が済んでいる
+   必要があります)。組み合わせるFirefox拡張機能(`.xpi`)のバージョンを
+   記録しておきたい場合は `--xpi-version 0.0.0.3` のように指定できます
+   (pip経由でXPI自体をインストールすることはできないため、記録用の
+   メタデータとして保存されるだけで動作には影響しません)。
+
+   インストール状態や周辺環境(pyusb/libusbバックエンド・Tkinter・
+   Rustアクセラレーション・ネイティブメッセージングマニフェストの登録
+   状況など)を後から診断したい場合は、以下のコマンドが使えます:
+   ```bash
+   fox-webusb-host-doctor          # 人間向けのテキストで表示
+   fox-webusb-host-doctor --json   # JSONで出力(CI等での利用を想定)
+   ```
 
 2. **(任意・推奨) Rustアクセラレーションをビルドする:**
    ```bash
@@ -486,6 +504,7 @@ fox-webusb/
 │   │   ├── settings_store.py 許可・既知デバイスのJSON永続化
 │   │   ├── chooser_dialog.py Tkinter製デバイス選択ダイアログ
 │   │   ├── protocol.py       ネイティブメッセージングの生ワイヤ形式+チャンク分割
+│   │   ├── diagnostics.py    環境診断(fox-webusb-host-doctor、v0.0.0.3で追加)
 │   │   └── __main__.py       常駐プロセスのエントリポイント(スレッド配線)
 │   ├── install.py / uninstall.py
 │   └── native-manifest/      ネイティブメッセージングホストマニフェストのひな形
@@ -500,8 +519,8 @@ fox-webusb/
 
 ```bash
 # Python側 (bridge.py / hardening.py / errors.py / settings_store.py / protocol.py /
-#  i18n.py + 実サブプロセス越しの疎通確認、計107件。cryptographyが無い環境では
-#  アテステーション関連の一部が自動的にスキップされる)
+#  i18n.py / diagnostics.py + 実サブプロセス越しの疎通確認、計122件。
+#  cryptographyが無い環境ではアテステーション関連の一部が自動的にスキップされる)
 cd native-host && pip install -e . --break-system-packages
 pip install pyusb pytest cryptography pytest --break-system-packages
 cd .. && python3 -m pytest tests/ -v

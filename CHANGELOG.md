@@ -5,6 +5,165 @@ pyside6-webusb の変更履歴(v0.0.1〜v0.0.4b0)は同プロジェクト自身�
 CHANGELOG.md を参照してください。fox-webusbはアーキテクチャが別物になった
 ため、バージョン番号は移植元の系列を引き継がず 0.0.0 から数え直しています。
 
+## [0.0.0.3] - pip installの安定化・環境診断ツール追加(GitHubタグ: v0.0.0a2+)
+
+fox-webusbがFirefoxアドオンとして正式に許諾されたことを受けて、`pip install`
+まわりの安定化と、姉妹プロジェクトpyside6-webusb(v0.0.5a0で追加、直近の
+`v0.0.5a2`≡`0.0.5.post3`まで確認)から発想を移植した環境診断ツールを追加した
+リリース。
+
+### バージョン表記について
+
+`0.0.0.1`/`0.0.0.2`はFirefoxのlinter警告解消のみが目的で、挙動・見た目の
+変更が一切無い「コンプライアンスのみ」の修正だったため、GitHubタグは
+`v0.0.0a1`のままにしていた。本リリースは新しい振る舞い(下記
+`fox-webusb-host-doctor`・`install.py`のロジック刷新・`--xpi-version`)を
+追加するため、姉妹プロジェクトpyside6-webusbが`0.0.5a0`エントリで採った
+のと同じ理由(「単なるパッチ番号の繰り上げではなく振る舞いを追加するので
+アルファ番号を進める」)で、GitHubタグ側のアルファ番号を `a1` → `a2` へ
+進めている(`v0.0.0a2+`——さらなるコンプライアンスのみの修正が今後続く
+場合は、pyside6-webusbの`.post`運用とは違いFirefoxのmanifest.jsonが
+英字を一切許さないため、それらも新しいタグを切らずこの`a2+`の範囲内の
+まま4番目のセグメントを伸ばして表す、という意図の「+」)。manifest.json
+(および同期させている`__init__.py`/`pyproject.toml`)のバージョン文字列
+自体は、`0.0.0.1`/`0.0.0.2`の時と同じ理由(Firefoxの仕様上、バージョン
+文字列に英字を含められない)により、GitHubタグとは独立に単純な4番目の
+セグメントの継続として`0.0.0.3`としている。
+
+### Added
+
+- **`fox-webusb-host-doctor`(新しいコンソールスクリプト)/
+  `python -m fox_webusb_host.diagnostics`。** 姉妹プロジェクト
+  pyside6-webusbが`0.0.5a0`で追加した`pyside6-webusb-doctor`と同じ発想——
+  「`navigator.usb`が動かない」という報告の多くは、このパッケージ自身の
+  ロジックのバグではなく周辺環境に起因する——を、fox-webusbのネイティブ
+  メッセージングという文脈に合わせて移植した。`environment_report()`/
+  `format_environment_report()`(新規`diagnostics.py`)は、pyusbのバージョン
+  ・実際に解決できたlibusbバックエンド(`libusb1`/`libusb0`)・Tkinter
+  (チューザーダイアログ用)・cryptography(任意のアテステーション機能用)
+  ・Rustアクセラレーションの有無に加えて、**fox-webusb-host固有の項目として、
+  「`fox-webusb-host`コンソールスクリプトが今のインタプリタから見て正しい
+  場所に実在するか」と「このOSに登録済みのネイティブメッセージング
+  マニフェストがあれば、そこに記録された起動パスが今も実在するか」**を
+  診断する——これは今回の`install.py`側の変更(下記「Fixed」参照)が前提に
+  している「pipにpythonの通り道を任せる」という発想を、`install.py`の
+  ロジックとは独立に、インストール作業の後からでも再確認できるようにする
+  ためのもの。`--json`オプション(pyside6-webusb版が`0.0.5.post3`で追加した
+  ものと同じ)にも対応。`fox_webusb_host.__main__`(Firefoxから標準入出力
+  経由で直接起動される、常駐プロセス本体の既存の起動契約)には一切手を
+  入れておらず、完全に独立した別モジュール・別コンソールスクリプトとして
+  追加した。
+- **`install.py --xpi-version`。** 組み合わせて使う fox-webusb 拡張機能
+  (`.xpi`)のバージョンを記録用に指定できるようにした。pip経由でXPI自体を
+  インストールすることはできないため動作そのものには一切影響しない——
+  Firefoxが実際に読むネイティブメッセージングマニフェスト自体は変更せず
+  (未知のフィールドに対するFirefox側のスキーマ検証の挙動を検証できていない
+  状態で、既に許諾済みの本番連携を壊すリスクを取らないため)、
+  `~/.local/share/fox-webusb/paired-xpi-version.json`
+  (Windows/macOSはそれぞれの`_support_dir()`配下)という完全に別の
+  JSONファイルに`{"host_version": ..., "xpi_version": ...}`として記録する
+  だけの、`install.py`自身の出力と`fox-webusb-host-doctor`(将来の拡張)
+  からの参照用の任意メタデータ。`uninstall.py`もこのファイルを対象に
+  含めるよう更新した。
+
+### Fixed
+
+- **`install.py`が、`--python`で指定したインタプリタではなく、
+  install.py自身を実行しているインタプリタに対してしか
+  `import fox_webusb_host`を確認していなかった。** 旧バージョン
+  (`v0.0.0a1`)は、この抜けを覆い隠すための対症療法として、ランチャー
+  自体にこのリポジトリの`native-host/src`への絶対パスを`PYTHONPATH`として
+  常に埋め込んでいた(「`pip install -e .`が効いていれば無害、効いて
+  いなければ安全網」という前提)。しかし実際には`--python`で別の
+  インタプリタ(別のvenv等)を指定した場合、そのインタプリタで本当に
+  `pip install`が済んでいるかを一度も検証しないまま、常に自作の
+  PYTHONPATH埋め込みランチャーに頼っていた——実機(Windows + LibreWolf、
+  `checklog2.md`)で`ModuleNotFoundError`が再発した根本原因はこれで、
+  PYTHONPATHの埋め込みはそれを覆い隠していただけだった。実際に本リリース
+  の検証中、システムのpython3(パッケージ未インストール)からinstall.pyを
+  実行しつつ`--python`で「本当にpipインストール済みの別venv」を指定する
+  という、まさにこのシナリオを再現したところ、修正前のコードは
+  `エラー: fox_webusb_host がimportできません`と(誤って)報告することを
+  確認した。
+  新しい`_inspect_target_python()`は、`--python`で指定された、まさにその
+  インタプリタをサブプロセスとして実際に起動し、`import fox_webusb_host`
+  と`import usb.core`(pyusb)の両方をそのインタプリタ自身に確認させる
+  (pyusb側の警告も同じ理由で、これまで確認対象がずれていた)。その上で、
+  ランチャーの決め方自体も見直した:`_find_pip_console_script()`が、
+  `pip install`(または`pip install -e .`)がそのインタプリタに対して
+  実際に生成した`fox-webusb-host`コンソールスクリプトを
+  (`sysconfig.get_path('scripts')`と`--user`用schemeの両方をそのインタ
+  プリタ自身に問い合わせて)探し出し、見つかればそれをそのままネイティブ
+  メッセージングの起動パスとして使う——setuptools/pipが生成するこの
+  スクリプトは生成時のインタプリタ・site-packagesが常に正しく組み込まれて
+  いるため、PYTHONPATHのような追加の配線が原理的に不要になる。標準的でない
+  方法でインストールされた等、このスクリプトが見つからない場合にのみ、
+  フォールバックとして`<python> -m fox_webusb_host`を実行するだけの
+  (PYTHONPATHを埋め込まない)最小限のランチャーを書く。
+
+### Tests
+
+- `tests/test_diagnostics.py`(新規ファイル、15件): 実際にこの検証環境へ
+  インストールされている本物のpyusb/libusb1に対するクリーンな基準点、
+  および`sys.modules`への差し替えによる「pyusb自体が無い」
+  「pyusbはあるがlibusbバックエンドが無い」「libusb1バックエンドが実際に
+  解決できる」の3パターン、コンソールスクリプト検出・ネイティブ
+  マニフェスト状態(`tmp_path`によるテスト用の差し替え口
+  `_native_manifest_status(manifest_path=...)`経由、
+  `settings_store.SettingsStore(path=...)`と同じパターン)、
+  `format_environment_report()`の2分岐、`main()`の2つの終了コードと
+  `--json`分岐・`argv=None`時の`sys.argv`フォールバックを検証する。
+  **この過程で、自分自身が最初に書いたテストの誤りを2件、実際に走らせて
+  見つけた**: `usb`単体・葉モジュール単体だけを`sys.modules`へ差し込む
+  版は、`test_bridge.py`等が同じプロセス内で既に本物の`usb.backend`を
+  importし終えている場合(=フルテストスイートの中でこのファイル単体より
+  後ろで収集された場合)、`import usb.backend.libusb1 as _libusb1`が
+  `sys.modules`の葉エントリではなく本物の`usb.backend`モジュールが保持する
+  本物の`.libusb1`属性を辿ってしまい、偽装がすり抜けて本物のバックエンドを
+  掴んでいた——「バックエンドが無いケース」のテストが実際には本物の
+  libusb1が見えている環境でこっそり成功し、「libusb1が解決できるケース」
+  のテストも(たまたま結論が一致していたために)本当に偽物を検証できて
+  いなかった。`usb`・`usb.backend`・`usb.backend.libusb1`・
+  `usb.backend.libusb0`の連鎖を丸ごと(`sys.modules`のエントリと相互の
+  属性の両方)偽物に差し替える`_fake_usb_module()`ヘルパーに書き直し、
+  意図的に本物を先にimportしてから偽装を試す手順で実際に再現・確認した
+  上で修正した。
+- `tests/` 合計: **122件**(既存107件 + 上記15件、いずれもpass)。
+  `node tests/test_page_polyfill.js`(44件)・
+  `node tests/test_extension_surface.js`(6件)・
+  `cargo test --release`(`native/fox_webusb_accel`、13件)・
+  `types/`のTypeScript型チェックは本リリースで対象コードの変更が無いため
+  再実行していない。
+
+### Project metadata
+
+- Version: `0.0.0.3`(GitHubタグ: `v0.0.0a2+`)。
+- `native-host/pyproject.toml`: `license = { text = "MIT" }` を単一の
+  SPDX式(`license = "MIT"`)へ、`build-system.requires`を
+  `setuptools>=68`から`setuptools>=77`へ変更。姉妹プロジェクト
+  pyside6-webusbが`0.0.5a0`で見つけたのと全く同じ非推奨警告
+  (`project.license`のテーブル形式は2027-02-18に削除予定)を、本リリース
+  自身の`python -m build`の実行中に実際に検出して対応した(検査だけでなく
+  実際にビルドして見つけたもの)。
+- 検証環境: **Python `3.12.3`**、**`pyusb` `1.3.1`**(実際に`libusb1`
+  バックエンドが解決)。`python -m build`で`sdist`/`wheel`の両方をクリーン
+  ビルド(警告無し)し、`twine check`で両方とも合格を確認。ビルドした
+  wheelを`--no-deps`を付けずに(=依存関係もPyPIから解決させて)クリーンな
+  venvへ実際に`pip install`し、`fox-webusb-host`・`fox-webusb-host-doctor`
+  両方のコンソールスクリプトが生成されること、`fox-webusb-host-doctor`が
+  問題無しを報告すること、`fox-webusb-host`(pipが生成したコンソール
+  スクリプトそのもの)を実際に起動して標準入力を閉じた際に正しく起動ログを
+  出して終了することを確認した。さらに、その環境の`fox-webusb-host`/
+  `fox-webusb-host-doctor`を一時的に取り除いてから`install.py`を再実行し、
+  コンソールスクリプトが見つからない場合のフォールバック用ランチャー
+  (`<python> -m fox_webusb_host`)についても、生成されたランチャーを実際に
+  起動して同様に確認した。`uninstall.py`が、マニフェスト・
+  (使われていた場合)フォールバックランチャー・
+  `--xpi-version`指定時の記録ファイルをそれぞれ正しく削除することも
+  実際に確認済み。`web-ext lint`相当の`addons-linter`を`extension/`へ
+  実際に実行し、`0.0.0.2`の時と同じく errors 0 / warnings 0 / notices 0
+  を確認した。
+
 ## [0.0.0.2] - Firefoxアドオンlinter警告の解消(v0.0.0a1ベース)
 
 `v0.0.0a1`の機能一式はそのままに、AMO(addons.mozilla.org)のvalidator・
