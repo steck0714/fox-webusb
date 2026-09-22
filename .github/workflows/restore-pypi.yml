@@ -1,4 +1,4 @@
-name: Restore fox-webusb-host releases to PyPI
+name: Restore fox-webusb-host release to PyPI
 
 on:
   workflow_dispatch:
@@ -23,78 +23,15 @@ jobs:
 
       - name: Check distributions
         run: |
-          python -m twine check dist/*
+          python -m twine check \
+            dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
+            dist/fox_webusb_host-0.0.0.3.tar.gz
 
       - name: Upload distributions
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          set +e
-
-          SUCCESS_FILES=()
-          FAILED_FILES=()
-
-          echo "========================================"
-          echo "Starting PyPI upload"
-          echo "========================================"
-
-          for file in dist/*; do
-            echo
-            echo "========================================"
-            echo "Uploading: $file"
-            echo "========================================"
-
-            python -m twine upload --verbose "$file"
-
-            status=$?
-
-            if [ "$status" -eq 0 ]; then
-              echo "SUCCESS: $file"
-              SUCCESS_FILES+=("$file")
-            else
-              echo "SKIPPED: $file"
-              echo "Exit code: $status"
-              FAILED_FILES+=("$file")
-            fi
-          done
-
-          echo
-          echo "========================================"
-          echo "UPLOAD SUMMARY"
-          echo "========================================"
-
-          echo
-          echo "Successfully uploaded:"
-          if [ "${#SUCCESS_FILES[@]}" -eq 0 ]; then
-            echo "  (none)"
-          else
-            for file in "${SUCCESS_FILES[@]}"; do
-              echo "  ✓ $file"
-            done
-          fi
-
-          echo
-          echo "Skipped / rejected:"
-          if [ "${#FAILED_FILES[@]}" -eq 0 ]; then
-            echo "  (none)"
-          else
-            for file in "${FAILED_FILES[@]}"; do
-              echo "  ✗ $file"
-            done
-          fi
-
-          echo
-          echo "========================================"
-          echo "Finished."
-          echo "Successful: ${#SUCCESS_FILES[@]}"
-          echo "Skipped:    ${#FAILED_FILES[@]}"
-          echo "Total:      $(( ${#SUCCESS_FILES[@]} + ${#FAILED_FILES[@]} ))"
-          echo "========================================"
-
-          if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
-            echo "ERROR: One or more files failed to upload."
-            exit 1
-          fi
-
-          exit 0
+          python -m twine upload --verbose \
+            dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
+            dist/fox_webusb_host-0.0.0.3.tar.gz
