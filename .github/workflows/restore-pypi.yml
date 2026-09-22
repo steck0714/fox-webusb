@@ -1,4 +1,4 @@
-name: Restore fox-webusb-host release to PyPI
+name: Publish fox-webusb-host to PyPI
 
 on:
   workflow_dispatch:
@@ -27,33 +27,33 @@ jobs:
             dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
             dist/fox_webusb_host-0.0.0.3.tar.gz
 
-      - name: Verify PyPI token
+      - name: Verify token
         env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          if [ -z "$PYPI_API_TOKEN" ]; then
-            echo "ERROR: PYPI_API_TOKEN is empty."
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "ERROR: PYPI_API_TOKEN is empty"
             exit 1
           fi
 
-          case "$PYPI_API_TOKEN" in
+          case "$TWINE_PASSWORD" in
             pypi-*)
-              echo "PYPI_API_TOKEN is present."
-              echo "Token format: OK"
+              echo "PyPI token detected."
+              echo "Token prefix check: OK"
               ;;
             *)
-              echo "ERROR: Token does not start with pypi-."
+              echo "ERROR: Token does not start with pypi-"
               exit 1
               ;;
           esac
 
       - name: Upload to PyPI
         env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           python -m twine upload \
             --repository-url https://upload.pypi.org/legacy/ \
-            --username "__token__" \
-            --password "$PYPI_API_TOKEN" \
             dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
             dist/fox_webusb_host-0.0.0.3.tar.gz
