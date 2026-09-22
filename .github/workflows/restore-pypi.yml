@@ -92,4 +92,9 @@ jobs:
           echo "Total:      $(( ${#SUCCESS_FILES[@]} + ${#FAILED_FILES[@]} ))"
           echo "========================================"
 
+          if [ "${#FAILED_FILES[@]}" -gt 0 ]; then
+            echo "ERROR: One or more files failed to upload."
+            exit 1
+          fi
+
           exit 0
