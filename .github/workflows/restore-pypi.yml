@@ -27,11 +27,33 @@ jobs:
             dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
             dist/fox_webusb_host-0.0.0.3.tar.gz
 
+      - name: Check PyPI token
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$PYPI_API_TOKEN" ]; then
+            echo "ERROR: PYPI_API_TOKEN is empty."
+            exit 1
+          fi
+
+          case "$PYPI_API_TOKEN" in
+            pypi-*)
+              echo "PYPI_API_TOKEN is present."
+              echo "Token prefix check: OK"
+              ;;
+            *)
+              echo "ERROR: PYPI_API_TOKEN does not start with pypi-."
+              exit 1
+              ;;
+          esac
+
       - name: Upload distributions
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          python -m twine upload --verbose \
+          python -m twine upload \
+            --username "__token__" \
+            --password "$PYPI_API_TOKEN" \
+            --verbose \
             dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
             dist/fox_webusb_host-0.0.0.3.tar.gz
