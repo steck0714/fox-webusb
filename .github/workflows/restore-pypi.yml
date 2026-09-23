@@ -2,6 +2,11 @@ name: Publish fox-webusb-host to PyPI
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "公開するfox-webusb-hostのバージョン(例: 0.0.0.3)。dist/に同名のwhl/tar.gzが両方無いと失敗します。"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -16,36 +21,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Twine
+      - name: Confirm the requested files exist
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade twine
+          test -f "dist/fox_webusb_host-${{ inputs.version }}-py3-none-any.whl"
+          test -f "dist/fox_webusb_host-${{ inputs.version }}.tar.gz"
+
+      - name: Install fox-webusb-host + test dependencies
+        working-directory: native-host
+        run: python -m pip install -e ".[dev,attestation]"
+
+      - name: Run test suite (safety gate before an irreversible PyPI upload)
+        run: python -m pytest tests/ -v
+
+      - name: Install Twine
+        run: python -m pip install --upgrade twine
 
       - name: Check distributions
         run: |
           python -m twine check \
-            dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
-            dist/fox_webusb_host-0.0.0.3.tar.gz
+            "dist/fox_webusb_host-${{ inputs.version }}-py3-none-any.whl" \
+            "dist/fox_webusb_host-${{ inputs.version }}.tar.gz"
 
       - name: Verify token
         env:
-          TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           if [ -z "$TWINE_PASSWORD" ]; then
-            echo "ERROR: PYPI_API_TOKEN is empty"
-            exit 1
+            echo "ERROR: PYPI_API_TOKEN is empty"; exit 1
           fi
-
           case "$TWINE_PASSWORD" in
-            pypi-*)
-              echo "PyPI token detected."
-              echo "Token prefix check: OK"
-              ;;
-            *)
-              echo "ERROR: Token does not start with pypi-"
-              exit 1
-              ;;
+            pypi-*) echo "Token prefix check: OK" ;;
+            *) echo "ERROR: Token does not start with pypi-"; exit 1 ;;
           esac
 
       - name: Upload to PyPI
@@ -54,6 +60,5 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           python -m twine upload \
-            --repository-url https://upload.pypi.org/legacy/ \
-            dist/fox_webusb_host-0.0.0.3-py3-none-any.whl \
-            dist/fox_webusb_host-0.0.0.3.tar.gz
+            "dist/fox_webusb_host-${{ inputs.version }}-py3-none-any.whl" \
+            "dist/fox_webusb_host-${{ inputs.version }}.tar.gz"
