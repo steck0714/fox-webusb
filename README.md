@@ -1,6 +1,6 @@
 # fox-webusb
 
-**バージョン 0.0.0.2** ・ 移植元: pyside6-webusb v0.0.4b1
+**バージョン 0.0.0.3** ・ 移植元: pyside6-webusb v0.0.4b1
 
 Firefoxに `navigator.usb`(WebUSB)のポリフィルを追加する拡張機能 + ネイティブ
 メッセージングホストです。
